@@ -163,32 +163,16 @@ fn print_comparison_table(results: &[tls::HandshakeInfo]) {
 
             println!();
             println!("   {} Certificate #{}: {}", cert_type, cert_idx + 1, cert_summary);
-            println!("   ├─ Subject:    {}", truncate(&cert.subject, 70));
-            println!("   ├─ Issuer:     {}", truncate(&cert.issuer, 70));
-            println!("   ├─ Valid:      {} → {}", cert.not_before, cert.not_after);
-            println!("   ├─ Key:        {} (SHA256: {}...)", cert.key_type, &cert.fingerprint_sha256[..16]);
-            println!("   ├─ Serial:     {}", truncate(&cert.serial_number, 50));
+            println!("   ├─ Subject: {}", truncate(&cert.subject, 80));
+            println!("   ├─ Issuer:  {}", truncate(&cert.issuer, 80));
 
             if !cert.subject_alt_names.is_empty() {
-                print!("   ├─ SANs:       ");
+                print!("   └─ SANs:    ");
                 for (i, san) in cert.subject_alt_names.iter().enumerate() {
                     if i > 0 { print!(", "); }
-                    print!("{}", truncate(san, 30));
+                    print!("{}", truncate(san, 35));
                 }
                 println!();
-            }
-
-            if !cert.extensions.is_empty() {
-                println!("   └─ Extensions: {} total", cert.extensions.len());
-                for (i, ext) in cert.extensions.iter().take(3).enumerate() {
-                    let is_last = i == 2 || i == cert.extensions.len() - 1;
-                    print!("      ");
-                    print!("{}", if is_last { "└─" } else { "├─" });
-                    println!(" {}", ext.name);
-                }
-                if cert.extensions.len() > 3 {
-                    println!("      └─ ... and {} more", cert.extensions.len() - 3);
-                }
             }
         }
 

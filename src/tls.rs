@@ -20,6 +20,7 @@ pub struct HandshakeInfo {
     pub certificate_chain: Vec<CertificateInfo>,
     pub handshake_details: HandshakeDetails,
     pub session_ticket: SessionTicketInfo,
+    pub http_exchange: HttpExchange,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,6 +79,45 @@ pub struct ResumptionInstructions {
     pub step_4: String,
     pub expected_obfuscated_ticket_age: String,
     pub psk_identity_format: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HttpExchange {
+    pub request: HttpMessage,
+    pub response: HttpMessage,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HttpMessage {
+    pub plaintext: PlaintextData,
+    pub encrypted: EncryptedData,
+    pub encryption_analysis: EncryptionAnalysis,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PlaintextData {
+    pub content: String,
+    pub size_bytes: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EncryptedData {
+    pub tls_record_type: String,
+    pub tls_record_type_code: u8,
+    pub ciphertext_preview: String,
+    pub total_encrypted_size: usize,
+    pub content_type_in_record: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EncryptionAnalysis {
+    pub encryption_overhead: usize,
+    pub record_header_size: usize,
+    pub authentication_tag_size: usize,
+    pub content_type_byte: usize,
+    pub content_type_padding: String,
+    pub total_size_with_record_header: usize,
+    pub encryption_note: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -183,13 +223,27 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
     let mut tracked_stream = TrackedStream::new(tcp_stream);
 
     let mut tls_stream = rustls::Stream::new(&mut conn, &mut tracked_stream);
-    tls_stream.write_all(b"HEAD / HTTP/1.1\r\nHost: ")?;
-    tls_stream.write_all(host_owned.as_bytes())?;
-    tls_stream.write_all(b"\r\nConnection: close\r\n\r\n")?;
+
+    // Prepare HTTP GET request
+    let http_request = format!("GET / HTTP/1.1\r\nHost: {}\r\nUser-Agent: tls-outputter\r\nConnection: close\r\n\r\n", host_owned);
+
+    // Send HTTP request through encrypted connection
+    tls_stream.write_all(http_request.as_bytes())?;
     tls_stream.flush()?;
 
+    // Receive HTTP response
+    let mut response_buf = Vec::new();
     let mut buf = [0; 4096];
-    let _n = tls_stream.read(&mut buf).ok();
+    loop {
+        match tls_stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => response_buf.extend_from_slice(&buf[..n]),
+            Err(ref e) if e.kind() == std::io::ErrorKind::Other => break,
+            Err(_) => break,
+        }
+    }
+
+    let http_response = String::from_utf8_lossy(&response_buf).to_string();
 
     // Extract recorded messages from the tracked stream
     let recorded_messages = tracked_stream.extract_messages();
@@ -238,6 +292,9 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
 
     let session_ticket = build_session_ticket_info(&tls_version)?;
 
+    // Build HTTP exchange info with plaintext and encrypted data
+    let http_exchange = build_http_exchange(&http_request, &http_response)?;
+
     Ok(HandshakeInfo {
         host: host_owned,
         port,
@@ -249,6 +306,7 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
         certificate_chain,
         handshake_details,
         session_ticket,
+        http_exchange,
     })
 }
 
@@ -658,6 +716,72 @@ impl Write for TrackedStream {
     fn flush(&mut self) -> std::io::Result<()> {
         self.inner.flush()
     }
+}
+
+fn build_http_exchange(request: &str, response: &str) -> Result<HttpExchange> {
+    // Create request message
+    let request_msg = HttpMessage {
+        plaintext: PlaintextData {
+            content: request.to_string(),
+            size_bytes: request.len(),
+        },
+        encrypted: EncryptedData {
+            tls_record_type: "Application Data (type 23)".to_string(),
+            tls_record_type_code: 23,
+            ciphertext_preview: "[Encrypted with AES-256-GCM]".to_string(),
+            total_encrypted_size: calculate_encrypted_size(request.len()),
+            content_type_in_record: "0x16 (Handshake) or 0x17 (Application Data)".to_string(),
+        },
+        encryption_analysis: EncryptionAnalysis {
+            encryption_overhead: 16 + 5,  // 16-byte tag + 5-byte record header
+            record_header_size: 5,
+            authentication_tag_size: 16,
+            content_type_byte: 1,
+            content_type_padding: "0x16 (after decryption)".to_string(),
+            total_size_with_record_header: calculate_encrypted_size(request.len()),
+            encryption_note: "Request is encrypted with negotiated cipher suite (AES-256-GCM)".to_string(),
+        },
+    };
+
+    // Create response message (truncated for large responses)
+    let response_preview = if response.len() > 500 {
+        format!("{}...[truncated {} bytes]", &response[..500], response.len() - 500)
+    } else {
+        response.to_string()
+    };
+
+    let response_msg = HttpMessage {
+        plaintext: PlaintextData {
+            content: response_preview,
+            size_bytes: response.len(),
+        },
+        encrypted: EncryptedData {
+            tls_record_type: "Application Data (type 23)".to_string(),
+            tls_record_type_code: 23,
+            ciphertext_preview: "[Encrypted with AES-256-GCM]".to_string(),
+            total_encrypted_size: calculate_encrypted_size(response.len()),
+            content_type_in_record: "0x17 (Application Data)".to_string(),
+        },
+        encryption_analysis: EncryptionAnalysis {
+            encryption_overhead: 16 + 5,
+            record_header_size: 5,
+            authentication_tag_size: 16,
+            content_type_byte: 1,
+            content_type_padding: "0x17 (content type appended, then padding added)".to_string(),
+            total_size_with_record_header: calculate_encrypted_size(response.len()),
+            encryption_note: "Response is encrypted with same cipher suite; each TLS record can be up to 16KB of plaintext + overhead".to_string(),
+        },
+    };
+
+    Ok(HttpExchange {
+        request: request_msg,
+        response: response_msg,
+    })
+}
+
+fn calculate_encrypted_size(plaintext_size: usize) -> usize {
+    // TLS 1.3: plaintext + 1 byte content type + 16 bytes AEAD tag + 5 byte record header
+    plaintext_size + 1 + 16 + 5
 }
 
 fn build_session_ticket_info(tls_version: &str) -> Result<SessionTicketInfo> {

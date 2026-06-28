@@ -112,14 +112,14 @@ fn generate_cert_summary(cert: &tls::CertificateInfo, is_self_signed: bool) -> S
 }
 
 fn print_comparison_table(results: &[tls::HandshakeInfo]) {
-    println!("╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗");
-    println!("║                                              TLS CONFIGURATION COMPARISON                                                  ║");
-    println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
+    println!("╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗");
+    println!("║                                              TLS CONFIGURATION COMPARISON                                                                ║");
+    println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
 
     // Print header
-    println!("{:<20} {:<15} {:<35} {:<15} {:<20}",
-        "Host", "TLS Version", "Cipher Suite", "Key Bits", "Session Resume");
-    println!("{}", "─".repeat(105));
+    println!("{:<20} {:<15} {:<35} {:<15} {:<20} {:<25}",
+        "Host", "TLS Version", "Cipher Suite", "Key Bits", "Session Resume", "PQC Ready");
+    println!("{}", "─".repeat(130));
 
     // Print each result
     for info in results {
@@ -135,16 +135,24 @@ fn print_comparison_table(results: &[tls::HandshakeInfo]) {
         } else {
             "No"
         };
+        let pqc_status = if info.post_quantum_analysis.post_quantum_readiness.quantum_safe {
+            "✓ Quantum-Safe"
+        } else if info.post_quantum_analysis.hybrid_approach_available {
+            "~ Hybrid Ready"
+        } else {
+            "✗ Not Ready"
+        };
 
-        println!("{:<20} {:<15} {:<35} {:<15} {:<20}",
+        println!("{:<20} {:<15} {:<35} {:<15} {:<20} {:<25}",
             truncate(host, 19),
             truncate(tls_ver, 14),
             truncate(cipher, 34),
             key_bits,
-            resumption);
+            resumption,
+            pqc_status);
     }
 
-    println!("\n{}", "─".repeat(105));
+    println!("\n{}", "─".repeat(130));
     println!("\n📄 Certificate Chain Summary\n");
 
     // Print certificate details for entire chain

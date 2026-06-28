@@ -27,6 +27,8 @@ pub struct HandshakeMessage {
     pub message_type: String,
     pub size: usize,
     pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -375,12 +377,22 @@ impl TrackedStream {
                             "Server → Client".to_string()
                         };
 
+                        // Extract message payload
+                        let payload_start = pos + msg_pos + 4;
+                        let payload_end = payload_start + msg_length;
+                        let fields = if payload_end <= data.len() {
+                            parse_handshake_fields(msg_type, &data[payload_start..payload_end])
+                        } else {
+                            None
+                        };
+
                         self.messages.push(HandshakeMessage {
                             sequence: self.sequence,
                             direction,
                             message_type: type_name,
                             size: total_msg_size,
                             description,
+                            fields,
                         });
 
                         self.sequence += 1;
@@ -401,6 +413,7 @@ impl TrackedStream {
                         message_type: "ChangeCipherSpec".to_string(),
                         size: length,
                         description: "Cipher suite change notification (TLS 1.2)".to_string(),
+                        fields: None,
                     });
 
                     self.sequence += 1;
@@ -434,5 +447,124 @@ impl Write for TrackedStream {
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.inner.flush()
+    }
+}
+
+fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<std::collections::HashMap<String, serde_json::Value>> {
+    use std::collections::HashMap;
+    use serde_json::json;
+
+    let mut fields = HashMap::new();
+
+    match msg_type {
+        1 => {
+            // ClientHello
+            if data.len() < 34 {
+                return None;
+            }
+            let version = u16::from_be_bytes([data[0], data[1]]);
+            fields.insert("client_version".to_string(), json!(format!("0x{:04x}", version)));
+
+            // Random (32 bytes)
+            let random = data[2..34].iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join("");
+            fields.insert("random".to_string(), json!(random[..16].to_string() + "..."));
+
+            // Session ID Length
+            if data.len() > 34 {
+                let session_id_len = data[34] as usize;
+                fields.insert("session_id_length".to_string(), json!(session_id_len));
+
+                // Cipher Suites Length
+                let cs_start = 35 + session_id_len;
+                if data.len() > cs_start + 1 {
+                    let cs_len = u16::from_be_bytes([data[cs_start], data[cs_start + 1]]) as usize;
+                    let cipher_count = cs_len / 2;
+                    fields.insert("cipher_suites_count".to_string(), json!(cipher_count));
+                }
+            }
+            Some(fields)
+        }
+        2 => {
+            // ServerHello
+            if data.len() < 34 {
+                return None;
+            }
+            let version = u16::from_be_bytes([data[0], data[1]]);
+            fields.insert("server_version".to_string(), json!(format!("0x{:04x}", version)));
+
+            // Random
+            let random = data[2..34].iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join("");
+            fields.insert("random".to_string(), json!(random[..16].to_string() + "..."));
+
+            // Session ID
+            if data.len() > 34 {
+                let session_id_len = data[34] as usize;
+                fields.insert("session_id_length".to_string(), json!(session_id_len));
+
+                // Cipher Suite
+                let cs_pos = 35 + session_id_len;
+                if data.len() > cs_pos + 1 {
+                    let cipher_suite = u16::from_be_bytes([data[cs_pos], data[cs_pos + 1]]);
+                    fields.insert("selected_cipher_suite".to_string(), json!(format!("0x{:04x}", cipher_suite)));
+                }
+
+                // Compression Method
+                if data.len() > cs_pos + 2 {
+                    fields.insert("compression_method".to_string(), json!(data[cs_pos + 2]));
+                }
+            }
+            Some(fields)
+        }
+        5 => {
+            // Certificate
+            if data.len() < 3 {
+                return None;
+            }
+            let cert_chain_len = u32::from_be_bytes([0, data[0], data[1], data[2]]) as usize;
+            fields.insert("certificate_chain_length".to_string(), json!(cert_chain_len));
+
+            // Count certificates
+            let mut cert_count = 0;
+            let mut pos = 3;
+            while pos < data.len() && pos < 3 + cert_chain_len {
+                if pos + 3 <= data.len() {
+                    let cert_len = u32::from_be_bytes([0, data[pos], data[pos + 1], data[pos + 2]]) as usize;
+                    cert_count += 1;
+                    pos += 3 + cert_len;
+                } else {
+                    break;
+                }
+            }
+            fields.insert("certificate_count".to_string(), json!(cert_count));
+            Some(fields)
+        }
+        8 => {
+            // ServerHelloDone - no fields
+            fields.insert("message".to_string(), json!("No additional fields"));
+            Some(fields)
+        }
+        11 => {
+            // Finished - contains MAC/verification_data
+            fields.insert("verification_data_length".to_string(), json!(data.len()));
+            if data.len() > 0 {
+                let data_hex = data[..std::cmp::min(16, data.len())].iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .join("");
+                fields.insert("verification_data_preview".to_string(), json!(data_hex + if data.len() > 16 { "..." } else { "" }));
+            }
+            Some(fields)
+        }
+        _ => {
+            // For other message types, just include raw size
+            fields.insert("payload_length".to_string(), json!(data.len()));
+            Some(fields)
+        }
     }
 }

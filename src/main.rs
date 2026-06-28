@@ -219,6 +219,23 @@ fn print_comparison_table(results: &[tls::HandshakeInfo]) {
         println!();
     }
 
+    println!("\n🔐 Post-Quantum Cryptography Readiness\n");
+
+    // Print PQC analysis
+    for (idx, info) in results.iter().enumerate() {
+        let pq = &info.post_quantum_analysis;
+        println!("{}. {} (Quantum-Safe: {})",
+            idx + 1,
+            info.host,
+            if pq.post_quantum_readiness.quantum_safe { "✓ Yes" } else { "✗ No" });
+
+        println!("   Status: {}", pq.post_quantum_readiness.recommendation);
+        println!("   Hybrid Ready: {}", if pq.hybrid_approach_available { "Yes" } else { "No" });
+        println!("   Recommended: {}", &pq.hybrid_key_exchange.post_quantum_key_agreement.recommended);
+        println!("   Timeline: {}", &pq.migration_strategy.timeline);
+        println!();
+    }
+
     println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
 }
 

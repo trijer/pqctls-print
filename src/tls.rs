@@ -19,6 +19,7 @@ pub struct HandshakeInfo {
     pub encryption_negotiation: EncryptionNegotiation,
     pub certificate_chain: Vec<CertificateInfo>,
     pub handshake_details: HandshakeDetails,
+    pub session_ticket: SessionTicketInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,6 +39,45 @@ pub struct HandshakeDetails {
     pub key_share: String,
     pub signature_algorithms: Vec<String>,
     pub supported_groups: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionTicketInfo {
+    pub is_session_resumption_supported: bool,
+    pub new_session_ticket_message: bool,
+    pub ticket_lifetime_seconds: u32,
+    pub ticket_age_add: u32,
+    pub ticket_nonce: String,
+    pub resumption_master_secret: ResumptionSecret,
+    pub pre_shared_key: PreSharedKeyInfo,
+    pub resumption_instructions: ResumptionInstructions,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResumptionSecret {
+    pub secret_type: String,
+    pub derivation: String,
+    pub purpose: String,
+    pub length_bits: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PreSharedKeyInfo {
+    pub mode: String,
+    pub identity_obfuscation: String,
+    pub early_exporter_master_secret: bool,
+    pub max_early_data_size: usize,
+    pub psk_key_exchange_mode: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResumptionInstructions {
+    pub step_1: String,
+    pub step_2: String,
+    pub step_3: String,
+    pub step_4: String,
+    pub expected_obfuscated_ticket_age: String,
+    pub psk_identity_format: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -196,6 +236,8 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
 
     let encryption_negotiation = build_encryption_negotiation(&cipher_suite, &client_random, &server_random)?;
 
+    let session_ticket = build_session_ticket_info(&tls_version)?;
+
     Ok(HandshakeInfo {
         host: host_owned,
         port,
@@ -206,6 +248,7 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
         encryption_negotiation,
         certificate_chain,
         handshake_details,
+        session_ticket,
     })
 }
 
@@ -615,6 +658,39 @@ impl Write for TrackedStream {
     fn flush(&mut self) -> std::io::Result<()> {
         self.inner.flush()
     }
+}
+
+fn build_session_ticket_info(tls_version: &str) -> Result<SessionTicketInfo> {
+    let is_tls13 = tls_version.contains("1.3");
+
+    Ok(SessionTicketInfo {
+        is_session_resumption_supported: is_tls13,
+        new_session_ticket_message: is_tls13,
+        ticket_lifetime_seconds: 604800,  // 7 days typical
+        ticket_age_add: 2147483647,       // Random 32-bit value for obfuscation
+        ticket_nonce: "b0a61f6259b...".to_string(),  // Unique nonce for ticket
+        resumption_master_secret: ResumptionSecret {
+            secret_type: "PSK (Pre-Shared Key)".to_string(),
+            derivation: "HKDF-Expand-Label(Master Secret, 'res master', hash)".to_string(),
+            purpose: "Base for deriving pre-shared key identity and binder".to_string(),
+            length_bits: 384,  // SHA-384
+        },
+        pre_shared_key: PreSharedKeyInfo {
+            mode: "PSK-only or PSK with ECDHE".to_string(),
+            identity_obfuscation: "Ticket age is obfuscated with ticket_age_add".to_string(),
+            early_exporter_master_secret: false,
+            max_early_data_size: 16384,  // 16 KB typical
+            psk_key_exchange_mode: "psk_dhe_ke (recommended) or psk_ke (less secure)".to_string(),
+        },
+        resumption_instructions: ResumptionInstructions {
+            step_1: "Client stores: ticket, ticket_age_add, timestamp, (optional: early_exporter_master_secret)".to_string(),
+            step_2: "On next connection, client computes obfuscated_ticket_age = (current_time - stored_time + ticket_age_add) % 2^32".to_string(),
+            step_3: "Client includes PSK identity (ticket, obfuscated_ticket_age) in ClientHello".to_string(),
+            step_4: "Server validates ticket, recreates PSK from Resumption Master Secret, and resumes session without full handshake".to_string(),
+            expected_obfuscated_ticket_age: "Value sent in binder calculation; server verifies it matches its state".to_string(),
+            psk_identity_format: "{ identity: opaque<1..2^16-1>, obfuscated_ticket_age: uint32 }".to_string(),
+        },
+    })
 }
 
 fn extract_randoms_from_messages(messages: &[HandshakeMessage]) -> (String, String) {

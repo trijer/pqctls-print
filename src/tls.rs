@@ -30,15 +30,6 @@ pub struct HandshakeMessage {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<std::collections::HashMap<String, serde_json::Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encryption_negotiation_role: Option<EncryptionNegotiationRole>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EncryptionNegotiationRole {
-    pub is_negotiation_message: bool,
-    pub role: String,
-    pub negotiated_parameters: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,14 +49,6 @@ pub struct EncryptionNegotiation {
     pub aead_details: Option<AeadDetails>,
     pub key_exchange: KeyExchangeDetails,
     pub signature_algorithm: String,
-    pub negotiated_at: NegotiationLocation,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NegotiationLocation {
-    pub client_hello_sequence: usize,
-    pub server_hello_sequence: usize,
-    pub description: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -427,10 +410,9 @@ impl TrackedStream {
                 sequence: self.sequence,
                 direction: "Server → Client".to_string(),
                 message_type: "EncryptedExtensions".to_string(),
-                size: 0,
+                size: 0, // Encrypted, size unknown
                 description: "Server sends encrypted TLS extensions (TLS 1.3)".to_string(),
                 fields: Some(fields),
-                encryption_negotiation_role: None,
             });
             self.sequence += 1;
 
@@ -443,10 +425,9 @@ impl TrackedStream {
                 sequence: self.sequence,
                 direction: "Server → Client".to_string(),
                 message_type: "Certificate".to_string(),
-                size: 0,
+                size: 0, // Encrypted, size unknown
                 description: "Server presents certificate chain for authentication".to_string(),
                 fields: Some(fields),
-                encryption_negotiation_role: None,
             });
             self.sequence += 1;
 
@@ -459,10 +440,9 @@ impl TrackedStream {
                 sequence: self.sequence,
                 direction: "Server → Client".to_string(),
                 message_type: "CertificateVerify".to_string(),
-                size: 0,
+                size: 0, // Encrypted, size unknown
                 description: "Server proves possession of private key via signature".to_string(),
                 fields: Some(fields),
-                encryption_negotiation_role: None,
             });
             self.sequence += 1;
 
@@ -475,10 +455,9 @@ impl TrackedStream {
                 sequence: self.sequence,
                 direction: "Server → Client".to_string(),
                 message_type: "Finished".to_string(),
-                size: 0,
+                size: 0, // Encrypted, size unknown
                 description: "Handshake complete, includes MAC of all messages".to_string(),
                 fields: Some(fields),
-                encryption_negotiation_role: None,
             });
             self.sequence += 1;
         }
@@ -493,10 +472,9 @@ impl TrackedStream {
                 sequence: self.sequence,
                 direction: "Client → Server".to_string(),
                 message_type: "Finished".to_string(),
-                size: 0,
+                size: 0, // Encrypted, size unknown
                 description: "Client handshake complete with MAC".to_string(),
                 fields: Some(fields),
-                encryption_negotiation_role: None,
             });
             self.sequence += 1;
         }
@@ -548,33 +526,6 @@ impl TrackedStream {
                             None
                         };
 
-                        // Determine if this message is part of encryption negotiation
-                        let encryption_negotiation_role = match msg_type {
-                            1 => { // ClientHello
-                                Some(EncryptionNegotiationRole {
-                                    is_negotiation_message: true,
-                                    role: "Offers cipher suites and key exchange parameters".to_string(),
-                                    negotiated_parameters: vec![
-                                        "Supported cipher suites".to_string(),
-                                        "Supported key exchange groups".to_string(),
-                                        "Signature algorithms".to_string(),
-                                    ],
-                                })
-                            }
-                            2 => { // ServerHello
-                                Some(EncryptionNegotiationRole {
-                                    is_negotiation_message: true,
-                                    role: "Selects cipher suite and key exchange parameters".to_string(),
-                                    negotiated_parameters: vec![
-                                        "Selected cipher suite".to_string(),
-                                        "Selected key exchange group".to_string(),
-                                        "Selected signature algorithm".to_string(),
-                                    ],
-                                })
-                            }
-                            _ => None,
-                        };
-
                         self.messages.push(HandshakeMessage {
                             sequence: self.sequence,
                             direction,
@@ -582,7 +533,6 @@ impl TrackedStream {
                             size: total_msg_size,
                             description,
                             fields,
-                            encryption_negotiation_role,
                         });
 
                         self.sequence += 1;
@@ -604,7 +554,6 @@ impl TrackedStream {
                         size: length,
                         description: "Cipher suite change notification (TLS 1.2)".to_string(),
                         fields: None,
-                        encryption_negotiation_role: None,
                     });
 
                     self.sequence += 1;
@@ -684,11 +633,6 @@ fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiat
                 forward_secrecy: true,
             },
             signature_algorithm: "RSA-PSS-SHA384 or ECDSA-SHA384".to_string(),
-            negotiated_at: NegotiationLocation {
-                client_hello_sequence: 0,
-                server_hello_sequence: 1,
-                description: "Cipher suite negotiated between ClientHello (offers) and ServerHello (selects)".to_string(),
-            },
         })
     } else if cipher_suite.contains("AES_128_GCM") {
         Ok(EncryptionNegotiation {
@@ -718,11 +662,6 @@ fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiat
                 forward_secrecy: true,
             },
             signature_algorithm: "RSA-PSS-SHA256 or ECDSA-SHA256".to_string(),
-            negotiated_at: NegotiationLocation {
-                client_hello_sequence: 0,
-                server_hello_sequence: 1,
-                description: "Cipher suite negotiated between ClientHello (offers) and ServerHello (selects)".to_string(),
-            },
         })
     } else if cipher_suite.contains("CHACHA20") {
         Ok(EncryptionNegotiation {
@@ -748,11 +687,6 @@ fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiat
                 forward_secrecy: true,
             },
             signature_algorithm: "RSA-PSS-SHA256 or ECDSA-SHA256".to_string(),
-            negotiated_at: NegotiationLocation {
-                client_hello_sequence: 0,
-                server_hello_sequence: 1,
-                description: "Cipher suite negotiated between ClientHello (offers) and ServerHello (selects)".to_string(),
-            },
         })
     } else {
         // Generic fallback
@@ -773,11 +707,6 @@ fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiat
                 forward_secrecy: true,
             },
             signature_algorithm: "Unknown".to_string(),
-            negotiated_at: NegotiationLocation {
-                client_hello_sequence: 0,
-                server_hello_sequence: 1,
-                description: "Cipher suite negotiated between ClientHello (offers) and ServerHello (selects)".to_string(),
-            },
         })
     }
 }

@@ -49,6 +49,17 @@ pub struct EncryptionNegotiation {
     pub aead_details: Option<AeadDetails>,
     pub key_exchange: KeyExchangeDetails,
     pub signature_algorithm: String,
+    pub secret_derivation: SecretDerivation,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SecretDerivation {
+    pub client_random: String,
+    pub server_random: String,
+    pub randoms_combined_length: usize,
+    pub key_derivation_function: String,
+    pub prf_hash_algorithm: String,
+    pub derived_secrets: Vec<DerivedSecret>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -80,6 +91,14 @@ pub struct KeyExchangeDetails {
     pub algorithm: String,
     pub group: String,
     pub forward_secrecy: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DerivedSecret {
+    pub name: String,
+    pub purpose: String,
+    pub length_bits: usize,
+    pub kdf_formula: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -172,7 +191,10 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
         ],
     };
 
-    let encryption_negotiation = build_encryption_negotiation(&cipher_suite)?;
+    // Extract client and server randoms from handshake messages
+    let (client_random, server_random) = extract_randoms_from_messages(&recorded_messages);
+
+    let encryption_negotiation = build_encryption_negotiation(&cipher_suite, &client_random, &server_random)?;
 
     Ok(HandshakeInfo {
         host: host_owned,
@@ -595,7 +617,30 @@ impl Write for TrackedStream {
     }
 }
 
-fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiation> {
+fn extract_randoms_from_messages(messages: &[HandshakeMessage]) -> (String, String) {
+    let mut client_random = String::from("(not captured)");
+    let mut server_random = String::from("(not captured)");
+
+    for msg in messages {
+        if msg.message_type == "ClientHello" {
+            if let Some(fields) = &msg.fields {
+                if let Some(serde_json::Value::String(random)) = fields.get("random") {
+                    client_random = random.clone();
+                }
+            }
+        } else if msg.message_type == "ServerHello" {
+            if let Some(fields) = &msg.fields {
+                if let Some(serde_json::Value::String(random)) = fields.get("random") {
+                    server_random = random.clone();
+                }
+            }
+        }
+    }
+
+    (client_random, server_random)
+}
+
+fn build_encryption_negotiation(cipher_suite: &str, client_random: &str, server_random: &str) -> Result<EncryptionNegotiation> {
     // Parse cipher suite to extract cryptographic details
     // Format: "SUITE_NAME (0xXXXX)"
     let suite_code = cipher_suite
@@ -623,8 +668,8 @@ fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiat
             aead_details: Some(AeadDetails {
                 algorithm: "AES-256-GCM".to_string(),
                 key_bits: 256,
-                nonce_bits: 96,  // 96-bit nonce/IV for GCM
-                tag_bits: 128,   // 128-bit authentication tag
+                nonce_bits: 96,
+                tag_bits: 128,
                 plaintext_record_size_limit: 16384,
             }),
             key_exchange: KeyExchangeDetails {
@@ -633,6 +678,63 @@ fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiat
                 forward_secrecy: true,
             },
             signature_algorithm: "RSA-PSS-SHA384 or ECDSA-SHA384".to_string(),
+            secret_derivation: SecretDerivation {
+                client_random: client_random.to_string(),
+                server_random: server_random.to_string(),
+                randoms_combined_length: 64,
+                key_derivation_function: "HKDF (HMAC-based Extract-and-Expand Key Derivation Function)".to_string(),
+                prf_hash_algorithm: "SHA-384".to_string(),
+                derived_secrets: vec![
+                    DerivedSecret {
+                        name: "Early Secret".to_string(),
+                        purpose: "Used for early data (0-RTT)".to_string(),
+                        length_bits: 384,
+                        kdf_formula: "HKDF-Extract(salt=0, IKM=0x0000...)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Handshake Secret".to_string(),
+                        purpose: "Derives server_handshake_traffic_secret and client_handshake_traffic_secret".to_string(),
+                        length_bits: 384,
+                        kdf_formula: "HKDF-Extract(salt=Early Secret, IKM=ECDHE shared secret)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Server Handshake Traffic Secret".to_string(),
+                        purpose: "Encrypts ServerHello, EncryptedExtensions, Certificate, CertificateVerify, Finished".to_string(),
+                        length_bits: 384,
+                        kdf_formula: "HKDF-Expand-Label(Handshake Secret, 's hs traffic', ServerHello...Finished)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Client Handshake Traffic Secret".to_string(),
+                        purpose: "Encrypts Client Finished message".to_string(),
+                        length_bits: 384,
+                        kdf_formula: "HKDF-Expand-Label(Handshake Secret, 'c hs traffic', ServerHello...Finished)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Master Secret".to_string(),
+                        purpose: "Base for all application traffic secrets".to_string(),
+                        length_bits: 384,
+                        kdf_formula: "HKDF-Extract(salt=Handshake Secret, IKM=0x0000...)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Server Application Traffic Secret 0".to_string(),
+                        purpose: "Encrypts application data from server".to_string(),
+                        length_bits: 384,
+                        kdf_formula: "HKDF-Expand-Label(Master Secret, 's ap traffic', ClientHello...Finished)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Client Application Traffic Secret 0".to_string(),
+                        purpose: "Encrypts application data from client".to_string(),
+                        length_bits: 384,
+                        kdf_formula: "HKDF-Expand-Label(Master Secret, 'c ap traffic', ClientHello...Finished)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Exporter Master Secret".to_string(),
+                        purpose: "For exporters like SSLKEYLOGFILE".to_string(),
+                        length_bits: 384,
+                        kdf_formula: "HKDF-Expand-Label(Master Secret, 'exp master', ClientHello...Finished)".to_string(),
+                    },
+                ],
+            },
         })
     } else if cipher_suite.contains("AES_128_GCM") {
         Ok(EncryptionNegotiation {
@@ -662,6 +764,63 @@ fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiat
                 forward_secrecy: true,
             },
             signature_algorithm: "RSA-PSS-SHA256 or ECDSA-SHA256".to_string(),
+            secret_derivation: SecretDerivation {
+                client_random: client_random.to_string(),
+                server_random: server_random.to_string(),
+                randoms_combined_length: 64,
+                key_derivation_function: "HKDF (HMAC-based Extract-and-Expand Key Derivation Function)".to_string(),
+                prf_hash_algorithm: "SHA-256".to_string(),
+                derived_secrets: vec![
+                    DerivedSecret {
+                        name: "Early Secret".to_string(),
+                        purpose: "Used for early data (0-RTT)".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Extract(salt=0, IKM=0x0000...)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Handshake Secret".to_string(),
+                        purpose: "Derives server_handshake_traffic_secret and client_handshake_traffic_secret".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Extract(salt=Early Secret, IKM=ECDHE shared secret)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Server Handshake Traffic Secret".to_string(),
+                        purpose: "Encrypts ServerHello, EncryptedExtensions, Certificate, CertificateVerify, Finished".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Expand-Label(Handshake Secret, 's hs traffic', ServerHello...Finished)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Client Handshake Traffic Secret".to_string(),
+                        purpose: "Encrypts Client Finished message".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Expand-Label(Handshake Secret, 'c hs traffic', ServerHello...Finished)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Master Secret".to_string(),
+                        purpose: "Base for all application traffic secrets".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Extract(salt=Handshake Secret, IKM=0x0000...)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Server Application Traffic Secret 0".to_string(),
+                        purpose: "Encrypts application data from server".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Expand-Label(Master Secret, 's ap traffic', ClientHello...Finished)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Client Application Traffic Secret 0".to_string(),
+                        purpose: "Encrypts application data from client".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Expand-Label(Master Secret, 'c ap traffic', ClientHello...Finished)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Exporter Master Secret".to_string(),
+                        purpose: "For exporters like SSLKEYLOGFILE".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Expand-Label(Master Secret, 'exp master', ClientHello...Finished)".to_string(),
+                    },
+                ],
+            },
         })
     } else if cipher_suite.contains("CHACHA20") {
         Ok(EncryptionNegotiation {
@@ -687,6 +846,51 @@ fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiat
                 forward_secrecy: true,
             },
             signature_algorithm: "RSA-PSS-SHA256 or ECDSA-SHA256".to_string(),
+            secret_derivation: SecretDerivation {
+                client_random: client_random.to_string(),
+                server_random: server_random.to_string(),
+                randoms_combined_length: 64,
+                key_derivation_function: "HKDF (HMAC-based Extract-and-Expand Key Derivation Function)".to_string(),
+                prf_hash_algorithm: "SHA-256".to_string(),
+                derived_secrets: vec![
+                    DerivedSecret {
+                        name: "Handshake Secret".to_string(),
+                        purpose: "Derives handshake traffic secrets".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Extract(salt=Early Secret, IKM=ECDHE shared secret)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Server Handshake Traffic Secret".to_string(),
+                        purpose: "Encrypts server handshake messages".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Expand-Label(Handshake Secret, 's hs traffic', hash)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Client Handshake Traffic Secret".to_string(),
+                        purpose: "Encrypts client handshake messages".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Expand-Label(Handshake Secret, 'c hs traffic', hash)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Master Secret".to_string(),
+                        purpose: "Base for application traffic secrets".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Extract(salt=Handshake Secret, IKM=0x00...)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Server Application Traffic Secret".to_string(),
+                        purpose: "Encrypts server application data".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Expand-Label(Master Secret, 's ap traffic', hash)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Client Application Traffic Secret".to_string(),
+                        purpose: "Encrypts client application data".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Expand-Label(Master Secret, 'c ap traffic', hash)".to_string(),
+                    },
+                ],
+            },
         })
     } else {
         // Generic fallback
@@ -707,6 +911,27 @@ fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiat
                 forward_secrecy: true,
             },
             signature_algorithm: "Unknown".to_string(),
+            secret_derivation: SecretDerivation {
+                client_random: client_random.to_string(),
+                server_random: server_random.to_string(),
+                randoms_combined_length: 64,
+                key_derivation_function: "HKDF".to_string(),
+                prf_hash_algorithm: "SHA-256 or SHA-384".to_string(),
+                derived_secrets: vec![
+                    DerivedSecret {
+                        name: "Handshake Secret".to_string(),
+                        purpose: "Base secret for handshake phase".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Extract(salt, IKM)".to_string(),
+                    },
+                    DerivedSecret {
+                        name: "Master Secret".to_string(),
+                        purpose: "Base secret for application phase".to_string(),
+                        length_bits: 256,
+                        kdf_formula: "HKDF-Extract(salt, IKM)".to_string(),
+                    },
+                ],
+            },
         })
     }
 }

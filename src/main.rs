@@ -89,7 +89,7 @@ fn print_human_readable(info: &tls::HandshakeInfo) {
     // Handshake Flow
     println!("\n📨 Handshake Message Flow ({} messages)", info.handshake_messages.len());
     for msg in &info.handshake_messages {
-        let dir_symbol = if msg.direction.contains("Client") { "→" } else { "←" };
+        let dir_symbol = if msg.direction.starts_with("Client") { "→" } else { "←" };
         println!("  [{}] {} {} ({} bytes)",
             msg.sequence, dir_symbol, msg.message_type, msg.size);
     }

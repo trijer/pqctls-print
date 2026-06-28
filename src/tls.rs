@@ -15,12 +15,12 @@ pub struct HandshakeInfo {
     pub timestamp: u64,
     pub tls_version: String,
     pub cipher_suite: String,
+    pub handshake_details: HandshakeDetails,
     pub handshake_messages: Vec<HandshakeMessage>,
     pub encryption_negotiation: EncryptionNegotiation,
-    pub certificate_chain: Vec<CertificateInfo>,
-    pub handshake_details: HandshakeDetails,
     pub session_ticket: SessionTicketInfo,
     pub http_exchange: HttpExchange,
+    pub certificate_chain: Vec<CertificateInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -301,12 +301,12 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
         timestamp,
         tls_version,
         cipher_suite,
+        handshake_details,
         handshake_messages: recorded_messages,
         encryption_negotiation,
-        certificate_chain,
-        handshake_details,
         session_ticket,
         http_exchange,
+        certificate_chain,
     })
 }
 

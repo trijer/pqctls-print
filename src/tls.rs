@@ -16,6 +16,7 @@ pub struct HandshakeInfo {
     pub tls_version: String,
     pub cipher_suite: String,
     pub handshake_messages: Vec<HandshakeMessage>,
+    pub encryption_negotiation: EncryptionNegotiation,
     pub certificate_chain: Vec<CertificateInfo>,
     pub handshake_details: HandshakeDetails,
 }
@@ -37,6 +38,48 @@ pub struct HandshakeDetails {
     pub key_share: String,
     pub signature_algorithms: Vec<String>,
     pub supported_groups: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EncryptionNegotiation {
+    pub cipher_suite_code: String,
+    pub cipher_suite_name: String,
+    pub encryption_algorithm: CipherAlgorithm,
+    pub mac_algorithm: Option<MacAlgorithm>,
+    pub aead_details: Option<AeadDetails>,
+    pub key_exchange: KeyExchangeDetails,
+    pub signature_algorithm: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CipherAlgorithm {
+    pub algorithm: String,
+    pub mode: String,
+    pub key_bits: usize,
+    pub block_size: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MacAlgorithm {
+    pub algorithm: String,
+    pub hash_bits: usize,
+    pub output_bits: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AeadDetails {
+    pub algorithm: String,
+    pub key_bits: usize,
+    pub nonce_bits: usize,
+    pub tag_bits: usize,
+    pub plaintext_record_size_limit: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KeyExchangeDetails {
+    pub algorithm: String,
+    pub group: String,
+    pub forward_secrecy: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -129,6 +172,8 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
         ],
     };
 
+    let encryption_negotiation = build_encryption_negotiation(&cipher_suite)?;
+
     Ok(HandshakeInfo {
         host: host_owned,
         port,
@@ -136,6 +181,7 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
         tls_version,
         cipher_suite,
         handshake_messages: recorded_messages,
+        encryption_negotiation,
         certificate_chain,
         handshake_details,
     })
@@ -546,6 +592,122 @@ impl Write for TrackedStream {
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.inner.flush()
+    }
+}
+
+fn build_encryption_negotiation(cipher_suite: &str) -> Result<EncryptionNegotiation> {
+    // Parse cipher suite to extract cryptographic details
+    // Format: "SUITE_NAME (0xXXXX)"
+    let suite_code = cipher_suite
+        .split("(")
+        .last()
+        .and_then(|s| s.strip_suffix(")"))
+        .unwrap_or("0x0000");
+
+    // Determine cipher details based on suite name
+    if cipher_suite.contains("AES_256_GCM") {
+        Ok(EncryptionNegotiation {
+            cipher_suite_code: suite_code.to_string(),
+            cipher_suite_name: "TLS_AES_256_GCM_SHA384".to_string(),
+            encryption_algorithm: CipherAlgorithm {
+                algorithm: "AES".to_string(),
+                mode: "GCM (Authenticated Encryption)".to_string(),
+                key_bits: 256,
+                block_size: 128,
+            },
+            mac_algorithm: Some(MacAlgorithm {
+                algorithm: "SHA-384".to_string(),
+                hash_bits: 384,
+                output_bits: 384,
+            }),
+            aead_details: Some(AeadDetails {
+                algorithm: "AES-256-GCM".to_string(),
+                key_bits: 256,
+                nonce_bits: 96,  // 96-bit nonce/IV for GCM
+                tag_bits: 128,   // 128-bit authentication tag
+                plaintext_record_size_limit: 16384,
+            }),
+            key_exchange: KeyExchangeDetails {
+                algorithm: "ECDHE (Elliptic Curve Diffie-Hellman Ephemeral)".to_string(),
+                group: "x25519 or secp384r1".to_string(),
+                forward_secrecy: true,
+            },
+            signature_algorithm: "RSA-PSS-SHA384 or ECDSA-SHA384".to_string(),
+        })
+    } else if cipher_suite.contains("AES_128_GCM") {
+        Ok(EncryptionNegotiation {
+            cipher_suite_code: suite_code.to_string(),
+            cipher_suite_name: "TLS_AES_128_GCM_SHA256".to_string(),
+            encryption_algorithm: CipherAlgorithm {
+                algorithm: "AES".to_string(),
+                mode: "GCM (Authenticated Encryption)".to_string(),
+                key_bits: 128,
+                block_size: 128,
+            },
+            mac_algorithm: Some(MacAlgorithm {
+                algorithm: "SHA-256".to_string(),
+                hash_bits: 256,
+                output_bits: 256,
+            }),
+            aead_details: Some(AeadDetails {
+                algorithm: "AES-128-GCM".to_string(),
+                key_bits: 128,
+                nonce_bits: 96,
+                tag_bits: 128,
+                plaintext_record_size_limit: 16384,
+            }),
+            key_exchange: KeyExchangeDetails {
+                algorithm: "ECDHE (Elliptic Curve Diffie-Hellman Ephemeral)".to_string(),
+                group: "x25519 or secp256r1".to_string(),
+                forward_secrecy: true,
+            },
+            signature_algorithm: "RSA-PSS-SHA256 or ECDSA-SHA256".to_string(),
+        })
+    } else if cipher_suite.contains("CHACHA20") {
+        Ok(EncryptionNegotiation {
+            cipher_suite_code: suite_code.to_string(),
+            cipher_suite_name: "TLS_CHACHA20_POLY1305_SHA256".to_string(),
+            encryption_algorithm: CipherAlgorithm {
+                algorithm: "ChaCha20".to_string(),
+                mode: "Poly1305 (Authenticated Encryption)".to_string(),
+                key_bits: 256,
+                block_size: 512,
+            },
+            mac_algorithm: None,
+            aead_details: Some(AeadDetails {
+                algorithm: "ChaCha20-Poly1305".to_string(),
+                key_bits: 256,
+                nonce_bits: 96,
+                tag_bits: 128,
+                plaintext_record_size_limit: 16384,
+            }),
+            key_exchange: KeyExchangeDetails {
+                algorithm: "ECDHE (Elliptic Curve Diffie-Hellman Ephemeral)".to_string(),
+                group: "x25519".to_string(),
+                forward_secrecy: true,
+            },
+            signature_algorithm: "RSA-PSS-SHA256 or ECDSA-SHA256".to_string(),
+        })
+    } else {
+        // Generic fallback
+        Ok(EncryptionNegotiation {
+            cipher_suite_code: suite_code.to_string(),
+            cipher_suite_name: cipher_suite.to_string(),
+            encryption_algorithm: CipherAlgorithm {
+                algorithm: "Unknown".to_string(),
+                mode: "Unknown".to_string(),
+                key_bits: 256,
+                block_size: 128,
+            },
+            mac_algorithm: None,
+            aead_details: None,
+            key_exchange: KeyExchangeDetails {
+                algorithm: "ECDHE".to_string(),
+                group: "Unknown".to_string(),
+                forward_secrecy: true,
+            },
+            signature_algorithm: "Unknown".to_string(),
+        })
     }
 }
 

@@ -278,7 +278,7 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
 
     let mut conn = ClientConnection::new(Arc::new(tls_config), server_name)?;
 
-    let mut tcp_stream = TcpStream::connect((host_owned.as_str(), port))?;
+    let tcp_stream = TcpStream::connect((host_owned.as_str(), port))?;
     tcp_stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
     tcp_stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
 
@@ -1320,7 +1320,7 @@ fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<std::collections:
     }
 }
 
-fn build_post_quantum_analysis(encryption_negotiation: &EncryptionNegotiation) -> PostQuantumAnalysis {
+fn build_post_quantum_analysis(_encryption_negotiation: &EncryptionNegotiation) -> PostQuantumAnalysis {
     // Available PQC algorithms (based on NIST standardization)
     let pqc_algorithms_available = vec![
         "Kyber-512".to_string(),

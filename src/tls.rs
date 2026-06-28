@@ -15,8 +15,18 @@ pub struct HandshakeInfo {
     pub timestamp: u64,
     pub tls_version: String,
     pub cipher_suite: String,
+    pub handshake_messages: Vec<HandshakeMessage>,
     pub certificate_chain: Vec<CertificateInfo>,
     pub handshake_details: HandshakeDetails,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HandshakeMessage {
+    pub sequence: usize,
+    pub direction: String,
+    pub message_type: String,
+    pub size: usize,
+    pub description: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,7 +76,9 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
     tcp_stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
     tcp_stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
 
-    let mut tls_stream = rustls::Stream::new(&mut conn, &mut tcp_stream);
+    let mut tracked_stream = TrackedStream::new(tcp_stream);
+
+    let mut tls_stream = rustls::Stream::new(&mut conn, &mut tracked_stream);
     tls_stream.write_all(b"HEAD / HTTP/1.1\r\nHost: ")?;
     tls_stream.write_all(host_owned.as_bytes())?;
     tls_stream.write_all(b"\r\nConnection: close\r\n\r\n")?;
@@ -74,6 +86,9 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
 
     let mut buf = [0; 4096];
     let _n = tls_stream.read(&mut buf).ok();
+
+    // Extract recorded messages from the tracked stream
+    let recorded_messages = tracked_stream.extract_messages();
 
     let tls_version = get_tls_version(&conn);
     let cipher_suite = get_cipher_suite(&conn);
@@ -118,6 +133,7 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
         timestamp,
         tls_version,
         cipher_suite,
+        handshake_messages: recorded_messages,
         certificate_chain,
         handshake_details,
     })
@@ -281,5 +297,142 @@ fn get_extension_name(oid: &Oid) -> String {
         "2.5.29.37" => "Extended Key Usage".to_string(),
         "2.5.29.17" => "Subject Alternative Name".to_string(),
         _ => format!("Unknown ({})", oid),
+    }
+}
+
+fn parse_handshake_type(msg_type: u8) -> (String, String) {
+    match msg_type {
+        0 => ("HelloRequest".to_string(), "Server requests renegotiation".to_string()),
+        1 => ("ClientHello".to_string(), "Client initiates TLS handshake with supported versions, ciphers, and extensions".to_string()),
+        2 => ("ServerHello".to_string(), "Server selects TLS version and cipher suite from client options".to_string()),
+        3 => ("NewSessionTicket".to_string(), "Server provides session resumption ticket (TLS 1.3)".to_string()),
+        4 => ("EncryptedExtensions".to_string(), "Server sends encrypted TLS extensions (TLS 1.3)".to_string()),
+        5 => ("Certificate".to_string(), "Server presents certificate chain for authentication".to_string()),
+        6 => ("ServerKeyExchange".to_string(), "Server provides key exchange parameters (TLS 1.2)".to_string()),
+        7 => ("CertificateRequest".to_string(), "Server requests client certificate (optional)".to_string()),
+        8 => ("ServerHelloDone".to_string(), "Server signals end of handshake messages (TLS 1.2)".to_string()),
+        9 => ("CertificateVerify".to_string(), "Client/Server proves possession of private key via signature".to_string()),
+        10 => ("ClientKeyExchange".to_string(), "Client sends key exchange parameters (TLS 1.2)".to_string()),
+        11 => ("Finished".to_string(), "Handshake complete, includes MAC of all messages".to_string()),
+        12 => ("KeyUpdate".to_string(), "Update traffic keys (TLS 1.3)".to_string()),
+        _ => (format!("Unknown({})", msg_type), "Unknown message type".to_string()),
+    }
+}
+
+pub struct TrackedStream {
+    inner: TcpStream,
+    messages: Vec<HandshakeMessage>,
+    sequence: usize,
+}
+
+impl TrackedStream {
+    pub fn new(stream: TcpStream) -> Self {
+        TrackedStream {
+            inner: stream,
+            messages: Vec::new(),
+            sequence: 0,
+        }
+    }
+
+    pub fn extract_messages(self) -> Vec<HandshakeMessage> {
+        self.messages
+    }
+
+    fn extract_tls_messages(&mut self, data: &[u8], is_write: bool) {
+        let mut pos = 0;
+        while pos + 5 <= data.len() {
+            let content_type = data[pos];
+            let _version = u16::from_be_bytes([data[pos + 1], data[pos + 2]]);
+            let length = u16::from_be_bytes([data[pos + 3], data[pos + 4]]) as usize;
+
+            // Skip TLS record header
+            pos += 5;
+
+            if pos + length > data.len() {
+                break;
+            }
+
+            // TLS record types: 22 = Handshake, 23 = Application Data, 20 = ChangeCipherSpec, 25 = Finished
+            match content_type {
+                22 => {
+                    // Handshake record
+                    let mut msg_pos = 0;
+                    while msg_pos + 4 <= length {
+                        let msg_type = data[pos + msg_pos];
+                        let msg_length = u32::from_be_bytes([
+                            0,
+                            data[pos + msg_pos + 1],
+                            data[pos + msg_pos + 2],
+                            data[pos + msg_pos + 3],
+                        ]) as usize;
+
+                        let (type_name, description) = parse_handshake_type(msg_type);
+                        let total_msg_size = msg_length + 4; // +4 for header
+
+                        let direction = if is_write {
+                            "Client → Server".to_string()
+                        } else {
+                            "Server → Client".to_string()
+                        };
+
+                        self.messages.push(HandshakeMessage {
+                            sequence: self.sequence,
+                            direction,
+                            message_type: type_name,
+                            size: total_msg_size,
+                            description,
+                        });
+
+                        self.sequence += 1;
+                        msg_pos += total_msg_size;
+                    }
+                }
+                20 => {
+                    // ChangeCipherSpec
+                    let direction = if is_write {
+                        "Client → Server".to_string()
+                    } else {
+                        "Server → Client".to_string()
+                    };
+
+                    self.messages.push(HandshakeMessage {
+                        sequence: self.sequence,
+                        direction,
+                        message_type: "ChangeCipherSpec".to_string(),
+                        size: length,
+                        description: "Cipher suite change notification (TLS 1.2)".to_string(),
+                    });
+
+                    self.sequence += 1;
+                }
+                23 => {
+                    // Application Data - skip for now
+                }
+                _ => {}
+            }
+
+            pos += length;
+        }
+    }
+}
+
+impl Read for TrackedStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            self.extract_tls_messages(&buf[..n], false);
+        }
+        Ok(n)
+    }
+}
+
+impl Write for TrackedStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.extract_tls_messages(buf, true);
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
     }
 }

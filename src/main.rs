@@ -77,6 +77,40 @@ async fn analyze_url(url_str: &str) -> Result<(String, tls::HandshakeInfo)> {
     Ok((host, handshake_info))
 }
 
+fn generate_cert_summary(cert: &tls::CertificateInfo, is_self_signed: bool) -> String {
+    let mut parts = Vec::new();
+
+    // Self-signed indicator
+    if is_self_signed {
+        parts.push("Self-Signed".to_string());
+    }
+
+    // Key type and size
+    if let Some(size) = cert.key_size {
+        parts.push(format!("{}-bit {}", size, cert.key_type));
+    } else {
+        parts.push(cert.key_type.clone());
+    }
+
+    // Extract common name from subject
+    if let Some(cn_start) = cert.subject.find("CN=") {
+        if let Some(cn_end) = cert.subject[cn_start..].find(',') {
+            let cn = &cert.subject[cn_start + 3..cn_start + cn_end];
+            parts.push(format!("CN={}", truncate(cn, 30)));
+        } else {
+            let cn = &cert.subject[cn_start + 3..];
+            parts.push(format!("CN={}", truncate(cn, 30)));
+        }
+    }
+
+    // SAN count
+    if !cert.subject_alt_names.is_empty() {
+        parts.push(format!("+{} SANs", cert.subject_alt_names.len()));
+    }
+
+    parts.join(" • ")
+}
+
 fn print_comparison_table(results: &[tls::HandshakeInfo]) {
     println!("╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗");
     println!("║                                              TLS CONFIGURATION COMPARISON                                                  ║");
@@ -124,16 +158,19 @@ fn print_comparison_table(results: &[tls::HandshakeInfo]) {
                 _ => "🔗 Intermediate",
             };
 
+            let is_self_signed = cert.subject == cert.issuer;
+            let cert_summary = generate_cert_summary(cert, is_self_signed);
+
             println!();
-            println!("   {} Certificate #{}", cert_type, cert_idx + 1);
-            println!("   Subject:    {}", truncate(&cert.subject, 70));
-            println!("   Issuer:     {}", truncate(&cert.issuer, 70));
-            println!("   Valid:      {} → {}", cert.not_before, cert.not_after);
-            println!("   Key:        {} (SHA256: {}...)", cert.key_type, &cert.fingerprint_sha256[..16]);
-            println!("   Serial:     {}", truncate(&cert.serial_number, 50));
+            println!("   {} Certificate #{}: {}", cert_type, cert_idx + 1, cert_summary);
+            println!("   ├─ Subject:    {}", truncate(&cert.subject, 70));
+            println!("   ├─ Issuer:     {}", truncate(&cert.issuer, 70));
+            println!("   ├─ Valid:      {} → {}", cert.not_before, cert.not_after);
+            println!("   ├─ Key:        {} (SHA256: {}...)", cert.key_type, &cert.fingerprint_sha256[..16]);
+            println!("   ├─ Serial:     {}", truncate(&cert.serial_number, 50));
 
             if !cert.subject_alt_names.is_empty() {
-                print!("   SANs:       ");
+                print!("   ├─ SANs:       ");
                 for (i, san) in cert.subject_alt_names.iter().enumerate() {
                     if i > 0 { print!(", "); }
                     print!("{}", truncate(san, 30));
@@ -142,12 +179,15 @@ fn print_comparison_table(results: &[tls::HandshakeInfo]) {
             }
 
             if !cert.extensions.is_empty() {
-                println!("   Extensions: {} total", cert.extensions.len());
-                for ext in cert.extensions.iter().take(3) {
-                    println!("              • {}", ext.name);
+                println!("   └─ Extensions: {} total", cert.extensions.len());
+                for (i, ext) in cert.extensions.iter().take(3).enumerate() {
+                    let is_last = i == 2 || i == cert.extensions.len() - 1;
+                    print!("      ");
+                    print!("{}", if is_last { "└─" } else { "├─" });
+                    println!(" {}", ext.name);
                 }
                 if cert.extensions.len() > 3 {
-                    println!("              • ... and {} more", cert.extensions.len() - 3);
+                    println!("      └─ ... and {} more", cert.extensions.len() - 3);
                 }
             }
         }

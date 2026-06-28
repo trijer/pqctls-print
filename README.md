@@ -12,7 +12,18 @@ A Rust application that analyzes TLS handshakes by connecting to URLs and output
 - **Certificate Chain** - Complete X.509 certificate analysis from leaf to root
 - **HTTP Exchange** - Capture HTTP request/response with encryption overhead analysis
 - **Comparison Table** - Side-by-side TLS configuration comparison across domains
+- **Post-Quantum Readiness** - Assess quantum-safety status and migration strategy
 - **Dual Output** - Human-readable summary + JSON for programmatic analysis
+
+## Post-Quantum Cryptography Support
+
+The tool now analyzes **post-quantum cryptography (PQC) readiness** and displays quantum-safety status:
+
+- **✓ Quantum-Safe** - Server supports native RFC 9440 PQC (2025+)
+- **~ Hybrid Ready** - Server ready for client-side hybrid protection (NOW)
+- **✗ Not Ready** - Old protocols needing urgent upgrade
+
+**Learn more:** See [HYBRID_PQC_GUIDE.md](HYBRID_PQC_GUIDE.md) for detailed explanations of PQC readiness levels and implementation timelines.
 
 ## Building
 
@@ -133,6 +144,7 @@ Quickly spot:
 - Missing intermediates
 - Certificate expiration dates
 - Supported TLS versions
+- **Quantum-safety readiness**
 
 ### 2. **Compliance Check**
 Verify minimum TLS standards:
@@ -140,27 +152,111 @@ Verify minimum TLS standards:
 - Minimum key size (256 bits for AES-GCM)
 - Proper certificate chains
 - Session resumption support
+- **Post-quantum readiness status**
 
-### 3. **TLS Learning**
+### 3. **Quantum-Safe Migration Planning**
+Assess PQC readiness across infrastructure:
+```bash
+./tls-outputter https://prod1.example.com https://prod2.example.com https://prod3.example.com
+```
+Identify:
+- Servers ready for hybrid PQC now (Phase 1)
+- Servers needing TLS 1.3 upgrade (urgent)
+- Timeline for full quantum-safe deployment
+- Recommended PQC algorithms (Kyber-768 + Dilithium-3)
+
+See [HYBRID_PQC_GUIDE.md](HYBRID_PQC_GUIDE.md) for detailed migration strategies.
+
+### 4. **TLS Learning**
 Understand TLS 1.3 protocol:
 - See exact handshake message sequence
 - Understand encryption secret derivation
 - Learn about key share negotiation
 - Explore certificate chain validation
+- **Study post-quantum cryptography integration**
 
-### 4. **Troubleshooting**
+### 5. **Troubleshooting**
 Debug TLS issues:
 - Verify handshake completes successfully
 - Check encryption parameters
 - Inspect certificate details
 - Analyze message flow
+- **Diagnose PQC readiness issues**
 
-### 5. **Reporting**
+### 6. **Reporting**
 Generate compliance reports:
 - Use JSON output for scripts/tools
 - Create comparison tables
 - Track configuration over time
 - Generate audit logs
+- **Monitor quantum-safety progress**
+
+## Post-Quantum Cryptography (PQC) Analysis
+
+### Understanding PQC Readiness Status
+
+The tool displays three quantum-safety indicators:
+
+| Status | Indicator | Meaning | Timeline |
+|--------|-----------|---------|----------|
+| Quantum-Safe | ✓ | Native RFC 9440 PQC support | 2025-2026 |
+| Hybrid Ready | ~ | Modern ECDHE, client-side PQC possible | NOW |
+| Not Ready | ✗ | Old protocols, urgent upgrade needed | Immediate |
+
+### Example Output
+
+```
+example.com    TLS 1.3  AES-256-GCM  256  Yes  ~ Hybrid Ready
+google.com     TLS 1.3  AES-256-GCM  256  Yes  ~ Hybrid Ready
+legacy.old     TLS 1.2  AES-128-CBC  128  No   ✗ Not Ready
+```
+
+### What Each Status Means
+
+**✓ Quantum-Safe (2025+)**
+- Server implements hybrid PQC in TLS handshake
+- Full quantum-safe protection from both sides
+- Typical for cutting-edge cloud providers
+
+**~ Hybrid Ready (NOW)**
+- Server uses modern TLS 1.3 with ECDHE
+- Client can add post-quantum protection locally
+- Works without any server changes
+- ~95% of modern servers are here
+
+**✗ Not Ready**
+- Server uses old TLS or weak cryptography
+- Cannot safely add hybrid protection
+- Requires server upgrade immediately
+- Security risk for data confidentiality
+
+### Implementation Roadmap
+
+**Phase 1 (2024):** Client-side hybrid implementation
+- Implement Kyber-768 on client side
+- Combine with classical ECDHE secrets
+- Deploy on "Hybrid Ready" servers immediately
+
+**Phase 2 (2025-2026):** Server-side PQC deployment
+- Wait for RFC 9440 implementations
+- Deploy servers with native PQC support
+- Transition from hybrid to quantum-safe
+
+**Phase 3 (2026+):** Full quantum-safe standard
+- All servers support PQC natively
+- Hybrid suites become standard
+- Classical-only suites deprecated
+
+### For Detailed Explanation
+
+See [**HYBRID_PQC_GUIDE.md**](HYBRID_PQC_GUIDE.md) for:
+- Complete explanations of each status
+- Real-world examples
+- Migration checklists
+- Security risk analysis
+- Timeline for harvest-now-decrypt-later attacks
+
+---
 
 ## Technical Details
 
@@ -229,12 +325,19 @@ This is expected for self-signed certificates or incomplete chains. The tool dis
 ### No JSON file created
 Check write permissions in current working directory
 
+## Documentation
+
+- **[README.md](README.md)** - Feature overview and usage guide
+- **[HYBRID_PQC_GUIDE.md](HYBRID_PQC_GUIDE.md)** - Detailed PQC readiness explanation (recommended read!)
+
 ## Related Tools
 
 - **testssl.sh** - Comprehensive TLS security scanner
 - **Wireshark** - Network protocol analyzer
 - **openssl s_client** - Command-line TLS client
 - **nmap --script** - SSL/TLS scanning
+- **liboqs** - Open Quantum Safe cryptography library
+- **OpenSSL 3.x** - With PQC support (via OQS provider)
 
 ## License
 

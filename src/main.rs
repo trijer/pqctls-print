@@ -14,117 +14,164 @@ async fn main() -> Result<()> {
 
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 2 {
-        eprintln!("Usage: {} <url>", args[0]);
-        eprintln!("Example: {} https://example.com", args[0]);
+    if args.len() < 2 {
+        eprintln!("Usage: {} <url> [url2] [url3] ...", args[0]);
+        eprintln!("Example: {} https://example.com https://google.com", args[0]);
         std::process::exit(1);
     }
 
-    let url_str = &args[1];
-    let url = Url::parse(url_str).map_err(|e| {
-        anyhow::anyhow!("Failed to parse URL '{}': {}", url_str, e)
-    })?;
+    let url_strings: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
+    let mut results = Vec::new();
 
-    let host = url.host_str().ok_or_else(|| {
-        anyhow::anyhow!("URL must include a host")
-    })?;
+    // Analyze each URL
+    for url_str in &url_strings {
+        eprintln!("\n🔍 Analyzing: {}", url_str);
 
-    let port = url.port().unwrap_or(443);
+        match analyze_url(url_str).await {
+            Ok((host, info)) => {
+                // Save individual JSON file
+                let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let filename = format!("tls_{}_{}.json", host, timestamp);
+                let filepath = PathBuf::from(&filename);
+                let json = serde_json::to_string_pretty(&info)?;
+                fs::write(&filepath, &json)?;
+                eprintln!("   ✓ Saved: {}", filepath.display());
 
-    eprintln!("Connecting to {}:{}", host, port);
+                results.push(info);
+            }
+            Err(e) => {
+                eprintln!("   ✗ Error: {}", e);
+            }
+        }
+    }
 
-    let handshake_info = tls::analyze_handshake(host, port).await?;
+    if results.is_empty() {
+        eprintln!("No successful analyses");
+        return Ok(());
+    }
 
-    // Generate filename: tls_hostname_timestamp.json
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("tls_{}_{}.json", host, timestamp);
-    let filepath = PathBuf::from(&filename);
+    // Display comparison table
+    println!("\n");
+    print_comparison_table(&results);
 
-    // Write JSON to file
-    let json = serde_json::to_string_pretty(&handshake_info)?;
-    fs::write(&filepath, &json)?;
-
-    // Output human-readable summary to stdout
-    print_human_readable(&handshake_info);
-
-    eprintln!("\n✓ JSON output saved to: {}", filepath.display());
+    // Save comparison JSON
+    let comparison_json = serde_json::to_string_pretty(&results)?;
+    let comparison_file = format!("tls_comparison_{}.json", chrono::Local::now().format("%Y%m%d_%H%M%S"));
+    fs::write(&comparison_file, comparison_json)?;
+    eprintln!("\n✓ Comparison saved to: {}", comparison_file);
 
     Ok(())
 }
 
-fn print_human_readable(info: &tls::HandshakeInfo) {
-    println!("\n");
-    println!("╔════════════════════════════════════════════════════════════════╗");
-    println!("║                   TLS HANDSHAKE ANALYSIS                       ║");
-    println!("╚════════════════════════════════════════════════════════════════╝");
-    println!("\n");
+async fn analyze_url(url_str: &str) -> Result<(String, tls::HandshakeInfo)> {
+    let url = Url::parse(url_str)
+        .map_err(|e| anyhow::anyhow!("Failed to parse URL '{}': {}", url_str, e))?;
 
-    // Connection Info
-    println!("📡 Connection Info");
-    println!("  Host: {}", info.host);
-    println!("  Port: {}", info.port);
-    println!("  TLS Version: {}", info.tls_version);
-    println!("  Cipher Suite: {}", info.cipher_suite);
+    let host = url.host_str()
+        .ok_or_else(|| anyhow::anyhow!("URL must include a host"))?
+        .to_string();
 
-    // Negotiated Details
-    println!("\n🤝 Handshake Details");
-    println!("  Supported Versions:");
-    for v in &info.handshake_details.supported_versions {
-        println!("    • {}", v);
+    let port = url.port().unwrap_or(443);
+
+    let handshake_info = tls::analyze_handshake(&host, port).await?;
+    Ok((host, handshake_info))
+}
+
+fn print_comparison_table(results: &[tls::HandshakeInfo]) {
+    println!("╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗");
+    println!("║                                              TLS CONFIGURATION COMPARISON                                                  ║");
+    println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
+
+    // Print header
+    println!("{:<20} {:<15} {:<35} {:<15} {:<20}",
+        "Host", "TLS Version", "Cipher Suite", "Key Bits", "Session Resume");
+    println!("{}", "─".repeat(105));
+
+    // Print each result
+    for info in results {
+        let host = &info.host;
+        let tls_ver = &info.tls_version;
+        let cipher = &info.cipher_suite;
+        let key_bits = info.encryption_negotiation.aead_details
+            .as_ref()
+            .map(|a| a.key_bits.to_string())
+            .unwrap_or_else(|| "N/A".to_string());
+        let resumption = if info.session_ticket.is_session_resumption_supported {
+            "Yes (7 days)"
+        } else {
+            "No"
+        };
+
+        println!("{:<20} {:<15} {:<35} {:<15} {:<20}",
+            truncate(host, 19),
+            truncate(tls_ver, 14),
+            truncate(cipher, 34),
+            key_bits,
+            resumption);
     }
-    println!("  Key Share: {}", info.handshake_details.key_share);
-    println!("  Supported Groups:");
-    for g in &info.handshake_details.supported_groups {
-        println!("    • {}", g);
+
+    println!("\n{}", "─".repeat(105));
+    println!("\n📄 Detailed Certificate Info\n");
+
+    // Print certificate details
+    for (idx, info) in results.iter().enumerate() {
+        println!("{}. {}", idx + 1, info.host);
+        if let Some(cert) = info.certificate_chain.first() {
+            println!("   Subject: {}", cert.subject);
+            println!("   Issuer:  {}", cert.issuer);
+            println!("   Valid:   {} → {}", cert.not_before, cert.not_after);
+            println!("   Chain:   {} certificates", info.certificate_chain.len());
+        }
+        println!();
     }
 
-    // Encryption
-    println!("\n🔐 Encryption");
-    println!("  Algorithm: {}", info.encryption_negotiation.encryption_algorithm.algorithm);
-    if let Some(aead) = &info.encryption_negotiation.aead_details {
-        println!("  AEAD: {}", aead.algorithm);
-        println!("  Key Size: {} bits", aead.key_bits);
-        println!("  Nonce Size: {} bits", aead.nonce_bits);
-        println!("  Tag Size: {} bits", aead.tag_bits);
+    println!("🔐 Encryption Details\n");
+
+    // Print encryption details
+    for (idx, info) in results.iter().enumerate() {
+        println!("{}. {}", idx + 1, info.host);
+        println!("   Algorithm: {}", info.encryption_negotiation.encryption_algorithm.algorithm);
+        if let Some(aead) = &info.encryption_negotiation.aead_details {
+            println!("   AEAD:     {}", aead.algorithm);
+            println!("   Key:      {} bits", aead.key_bits);
+            println!("   Nonce:    {} bits", aead.nonce_bits);
+            println!("   Tag:      {} bits", aead.tag_bits);
+        }
+        println!();
     }
 
-    // Handshake Flow
-    println!("\n📨 Handshake Message Flow ({} messages)", info.handshake_messages.len());
-    for msg in &info.handshake_messages {
-        let dir_symbol = if msg.direction.starts_with("Client") { "→" } else { "←" };
-        println!("  [{}] {} {} ({} bytes)",
-            msg.sequence, dir_symbol, msg.message_type, msg.size);
+    println!("📨 Handshake Message Flow\n");
+
+    // Print handshake stats
+    for (idx, info) in results.iter().enumerate() {
+        println!("{}. {} ({} messages)", idx + 1, info.host, info.handshake_messages.len());
+
+        let mut client_msgs = 0;
+        let mut server_msgs = 0;
+        let mut total_size = 0;
+
+        for msg in &info.handshake_messages {
+            if msg.direction.starts_with("Client") {
+                client_msgs += 1;
+            } else {
+                server_msgs += 1;
+            }
+            total_size += msg.size;
+        }
+
+        println!("   Client → Server: {} messages", client_msgs);
+        println!("   Server → Client: {} messages", server_msgs);
+        println!("   Total Size:      {} bytes", total_size);
+        println!();
     }
 
-    // Session Ticket
-    println!("\n🎫 Session Resumption");
-    println!("  Supported: {}", if info.session_ticket.is_session_resumption_supported {
-        "Yes (TLS 1.3)"
+    println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
+}
+
+fn truncate(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
     } else {
-        "No"
-    });
-    println!("  Ticket Lifetime: {} seconds ({} days)",
-        info.session_ticket.ticket_lifetime_seconds,
-        info.session_ticket.ticket_lifetime_seconds / 86400);
-
-    // Certificate
-    println!("\n📜 Certificate Chain ({} certificates)", info.certificate_chain.len());
-    for (i, cert) in info.certificate_chain.iter().enumerate() {
-        println!("  [{}] {}", i + 1, cert.subject);
-        println!("      Issuer: {}", cert.issuer);
-        println!("      Valid: {} → {}", cert.not_before, cert.not_after);
+        format!("{}...", &s[..max_len - 3])
     }
-
-    // HTTP Exchange
-    println!("\n💬 HTTP Exchange");
-    println!("  Request Size (plaintext): {} bytes", info.http_exchange.request.plaintext.size_bytes);
-    println!("  Request Size (encrypted): {} bytes", info.http_exchange.request.encrypted.total_encrypted_size);
-    println!("  Response Size (plaintext): {} bytes", info.http_exchange.response.plaintext.size_bytes);
-    println!("  Response Size (encrypted): {} bytes", info.http_exchange.response.encrypted.total_encrypted_size);
-
-    let total_overhead = (info.http_exchange.request.encrypted.total_encrypted_size - info.http_exchange.request.plaintext.size_bytes) +
-                        (info.http_exchange.response.encrypted.total_encrypted_size - info.http_exchange.response.plaintext.size_bytes);
-    println!("  Total Encryption Overhead: {} bytes", total_overhead);
-
-    println!("\n╚════════════════════════════════════════════════════════════════╝\n");
 }

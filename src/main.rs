@@ -111,17 +111,47 @@ fn print_comparison_table(results: &[tls::HandshakeInfo]) {
     }
 
     println!("\n{}", "─".repeat(105));
-    println!("\n📄 Detailed Certificate Info\n");
+    println!("\n📄 Certificate Chain Summary\n");
 
-    // Print certificate details
+    // Print certificate details for entire chain
     for (idx, info) in results.iter().enumerate() {
-        println!("{}. {}", idx + 1, info.host);
-        if let Some(cert) = info.certificate_chain.first() {
-            println!("   Subject: {}", cert.subject);
-            println!("   Issuer:  {}", cert.issuer);
-            println!("   Valid:   {} → {}", cert.not_before, cert.not_after);
-            println!("   Chain:   {} certificates", info.certificate_chain.len());
+        println!("{}. {} ({} certificates in chain)", idx + 1, info.host, info.certificate_chain.len());
+
+        for (cert_idx, cert) in info.certificate_chain.iter().enumerate() {
+            let cert_type = match cert_idx {
+                0 => "🍃 Leaf",
+                n if n == info.certificate_chain.len() - 1 => "🔑 Root",
+                _ => "🔗 Intermediate",
+            };
+
+            println!();
+            println!("   {} Certificate #{}", cert_type, cert_idx + 1);
+            println!("   Subject:    {}", truncate(&cert.subject, 70));
+            println!("   Issuer:     {}", truncate(&cert.issuer, 70));
+            println!("   Valid:      {} → {}", cert.not_before, cert.not_after);
+            println!("   Key:        {} (SHA256: {}...)", cert.key_type, &cert.fingerprint_sha256[..16]);
+            println!("   Serial:     {}", truncate(&cert.serial_number, 50));
+
+            if !cert.subject_alt_names.is_empty() {
+                print!("   SANs:       ");
+                for (i, san) in cert.subject_alt_names.iter().enumerate() {
+                    if i > 0 { print!(", "); }
+                    print!("{}", truncate(san, 30));
+                }
+                println!();
+            }
+
+            if !cert.extensions.is_empty() {
+                println!("   Extensions: {} total", cert.extensions.len());
+                for ext in cert.extensions.iter().take(3) {
+                    println!("              • {}", ext.name);
+                }
+                if cert.extensions.len() > 3 {
+                    println!("              • ... and {} more", cert.extensions.len() - 3);
+                }
+            }
         }
+
         println!();
     }
 

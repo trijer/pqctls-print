@@ -266,6 +266,36 @@ pub struct MigrationStrategy {
     pub action_items: Vec<String>,
 }
 
+/// Analyze a TLS connection and produce a comprehensive security report.
+///
+/// # What We Can Capture
+/// - Unencrypted handshake messages (ClientHello, ServerHello, certificate, etc.)
+/// - Cipher suite and TLS version negotiation
+/// - Certificate chain details
+/// - Key exchange parameters
+/// - Session ticket presence (inferred from encrypted records)
+///
+/// # What We Cannot Capture (Without Rustls Modifications)
+/// - Encrypted handshake messages (EncryptedExtensions, CertificateVerify, Finished)
+/// - Session keys or master secrets
+/// - Session ticket contents (lifetime, nonce, identity)
+/// - Application data (HTTP responses are parsed but not dissected)
+///
+/// # Why?
+/// Rustls intentionally hides session keys for security reasons. This is correct behavior:
+/// - Prevents accidental key leakage through logs/dumps
+/// - Enforces forward secrecy semantics
+/// - Matches security practices of browsers/OS TLS stacks
+///
+/// # To See Encrypted Messages
+/// See detailed comments in:
+/// - TrackedStream::extract_tls_messages() - explains rustls fork/SSLKEYLOGFILE options
+/// - build_session_ticket_info() - explains how to decrypt NewSessionTicket
+///
+/// # Alternative Tools
+/// - Wireshark: Can decrypt if you have SSLKEYLOGFILE from the client
+/// - mitmproxy: MITM proxy that can intercept and decrypt TLS
+/// - tcpdump + OpenSSL: Capture wire data, decrypt with keys
 pub async fn analyze_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
     let host_owned = host.to_string();
 
@@ -810,6 +840,32 @@ impl TrackedStream {
                 }
                 23 => {
                     // Application Data / Encrypted Handshake Messages
+                    // NOTE: We can count encrypted records but cannot parse their contents.
+                    //
+                    // To actually see/decrypt encrypted TLS messages, we would need to:
+                    // 1. MODIFY RUSTLS: Fork rustls and expose session keys through a callback/hook
+                    //    - Current rustls design intentionally hides keys for security
+                    //    - Would require adding unsafe session key export functionality
+                    //    - Similar to OpenSSL's SSL_CTX_set_keylog_callback
+                    //
+                    // 2. ALTERNATIVE: Implement SSLKEYLOGFILE export (like Chromium, Firefox)
+                    //    - Write session keys to file during handshake
+                    //    - Use with Wireshark: Edit > Preferences > Protocols > TLS > (Pre)-Master-Secret log
+                    //    - Wireshark can then decrypt captured traffic
+                    //    - Requires client-side key logging (not feasible for server connections here)
+                    //
+                    // 3. USE MITM PROXY: Run through mitmproxy or similar
+                    //    - Terminate TLS at proxy, decrypt, re-encrypt to destination
+                    //    - Can inspect all encrypted content
+                    //    - Requires proxy configuration
+                    //
+                    // 4. CUSTOM RUSTLS BUILD: Create instrumented rustls
+                    //    - Add logging hooks that expose: ciphertexts, plaintexts, keys
+                    //    - Parse encrypted records at rustls::Stream layer
+                    //    - Significant rustls source modifications
+                    //
+                    // SECURITY TRADE-OFF: Exporting keys breaks forward secrecy guarantees
+                    // and reveals session secrets. Only use for debugging/analysis on trusted networks.
                     if is_write {
                         self.encrypted_records_from_client += 1;
                     } else {
@@ -914,16 +970,40 @@ fn calculate_encrypted_size(plaintext_size: usize) -> usize {
 fn build_session_ticket_info(tls_version: &str, messages: &[HandshakeMessage], has_post_handshake_data: bool) -> Result<SessionTicketInfo> {
     let is_tls13 = tls_version.contains("1.3");
 
+    // Detect NewSessionTicket by either:
+    // 1. Finding it explicitly in captured handshake messages (unlikely, as it's encrypted)
+    // 2. Detecting post-handshake encrypted records in TLS 1.3 (high confidence)
     let new_session_ticket_received = messages.iter()
         .any(|msg| msg.message_type == "NewSessionTicket")
         || (is_tls13 && has_post_handshake_data);
 
+    // NOTE: We report that NewSessionTicket was sent, but cannot extract actual ticket values.
+    // Hardcoded placeholder values below represent typical defaults.
+    //
+    // TO EXTRACT ACTUAL TICKET VALUES, would need:
+    // 1. Decrypt the NewSessionTicket message payload (requires session keys from rustls)
+    // 2. Parse the TLS 1.3 NewSessionTicket struct:
+    //    - ticket_lifetime (u32): how long server will accept resumption
+    //    - ticket_age_add (u32): random value for obfuscation
+    //    - ticket_nonce (variable length): unique nonce per ticket
+    //    - ticket (variable length): opaque ticket data (server-specific)
+    //
+    // SEE: https://tools.ietf.org/html/rfc8446#section-4.6.4
+    //
+    // WITHOUT DECRYPTION: We can only infer presence from:
+    // - Encrypted TLS record arriving post-handshake (current approach)
+    // - Connection state (whether rustls accepted a resumption ticket)
+    // - Server behavior (if it sends one, it likely supports resumption)
+    //
+    // Actual implementation would require the rustls modifications described
+    // in TrackedStream's encrypted record handling comment.
+
     Ok(SessionTicketInfo {
         is_session_resumption_supported: is_tls13 && new_session_ticket_received,
         new_session_ticket_message: new_session_ticket_received,
-        ticket_lifetime_seconds: 604800,
-        ticket_age_add: 2147483647,
-        ticket_nonce: "(encrypted, not captured)".to_string(),
+        ticket_lifetime_seconds: 604800,  // Typical default (7 days), not actual value
+        ticket_age_add: 2147483647,        // Placeholder, actual value from ticket
+        ticket_nonce: "(encrypted, not captured)".to_string(),  // Would need decryption
         resumption_master_secret: ResumptionSecret {
             secret_type: "PSK (Pre-Shared Key)".to_string(),
             derivation: "HKDF-Expand-Label(Master Secret, 'res master', hash)".to_string(),

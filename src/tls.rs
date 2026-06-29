@@ -320,6 +320,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
     let http_response = String::from_utf8_lossy(&response_buf).to_string();
 
     // Extract recorded messages from the tracked stream
+    let post_handshake_encrypted_count = tracked_stream.post_handshake_encrypted_records();
     let recorded_messages = tracked_stream.extract_messages();
 
     let tls_version = get_tls_version(&conn);
@@ -364,7 +365,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     let encryption_negotiation = build_encryption_negotiation(&cipher_suite, &client_random, &server_random)?;
 
-    let session_ticket = build_session_ticket_info(&tls_version, &recorded_messages)?;
+    let session_ticket = build_session_ticket_info(&tls_version, &recorded_messages, post_handshake_encrypted_count > 0)?;
 
     // Build HTTP exchange info with plaintext and encrypted data
     let http_exchange = build_http_exchange(&http_request, &http_response)?;
@@ -632,6 +633,10 @@ impl TrackedStream {
         // Add synthesized encrypted handshake messages based on TLS 1.3 flow
         self.add_encrypted_handshake_messages();
         self.messages
+    }
+
+    pub fn post_handshake_encrypted_records(&self) -> usize {
+        self.encrypted_records_from_server
     }
 
     fn add_encrypted_handshake_messages(&mut self) {
@@ -906,11 +911,12 @@ fn calculate_encrypted_size(plaintext_size: usize) -> usize {
     plaintext_size + 1 + 16 + 5
 }
 
-fn build_session_ticket_info(tls_version: &str, messages: &[HandshakeMessage]) -> Result<SessionTicketInfo> {
+fn build_session_ticket_info(tls_version: &str, messages: &[HandshakeMessage], has_post_handshake_data: bool) -> Result<SessionTicketInfo> {
     let is_tls13 = tls_version.contains("1.3");
 
     let new_session_ticket_received = messages.iter()
-        .any(|msg| msg.message_type == "NewSessionTicket");
+        .any(|msg| msg.message_type == "NewSessionTicket")
+        || (is_tls13 && has_post_handshake_data);
 
     Ok(SessionTicketInfo {
         is_session_resumption_supported: is_tls13 && new_session_ticket_received,

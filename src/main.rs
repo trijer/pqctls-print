@@ -15,12 +15,22 @@ async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: {} <url> [url2] [url3] ...", args[0]);
+        eprintln!("Usage: {} [--output-dir DIR] <url> [url2] [url3] ...", args[0]);
         eprintln!("Example: {} https://example.com https://google.com", args[0]);
+        eprintln!("Example: {} --output-dir ./results https://example.com", args[0]);
         std::process::exit(1);
     }
 
-    let url_strings: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
+    let (output_dir, url_strings) = parse_args(&args[1..])?;
+
+    if url_strings.is_empty() {
+        eprintln!("Error: No URLs provided");
+        eprintln!("Usage: {} [--output-dir DIR] <url> [url2] [url3] ...", args[0]);
+        std::process::exit(1);
+    }
+
+    fs::create_dir_all(&output_dir)?;
+
     let mut results = Vec::new();
 
     // Analyze each URL
@@ -29,10 +39,9 @@ async fn main() -> Result<()> {
 
         match analyze_url(url_str).await {
             Ok((host, info)) => {
-                // Save individual JSON file
                 let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
                 let filename = format!("tls_{}_{}.json", host, timestamp);
-                let filepath = PathBuf::from(&filename);
+                let filepath = output_dir.join(&filename);
                 let json = serde_json::to_string_pretty(&info)?;
                 fs::write(&filepath, &json)?;
                 eprintln!("   ✓ Saved: {}", filepath.display());
@@ -57,10 +66,34 @@ async fn main() -> Result<()> {
     // Save comparison JSON
     let comparison_json = serde_json::to_string_pretty(&results)?;
     let comparison_file = format!("tls_comparison_{}.json", chrono::Local::now().format("%Y%m%d_%H%M%S"));
-    fs::write(&comparison_file, comparison_json)?;
-    eprintln!("\n✓ Comparison saved to: {}", comparison_file);
+    let comparison_path = output_dir.join(&comparison_file);
+    fs::write(&comparison_path, comparison_json)?;
+    eprintln!("\n✓ Comparison saved to: {}", comparison_path.display());
 
     Ok(())
+}
+
+fn parse_args(args: &[String]) -> Result<(PathBuf, Vec<String>)> {
+    let mut output_dir = PathBuf::from(".");
+    let mut urls = Vec::new();
+    let mut i = 0;
+
+    while i < args.len() {
+        if args[i] == "--output-dir" {
+            if i + 1 >= args.len() {
+                return Err(anyhow::anyhow!("--output-dir requires a directory path"));
+            }
+            output_dir = PathBuf::from(&args[i + 1]);
+            i += 2;
+        } else if args[i].starts_with("--") {
+            return Err(anyhow::anyhow!("Unknown option: {}", args[i]));
+        } else {
+            urls.push(args[i].clone());
+            i += 1;
+        }
+    }
+
+    Ok((output_dir, urls))
 }
 
 async fn analyze_url(url_str: &str) -> Result<(String, tls::HandshakeInfo)> {

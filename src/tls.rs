@@ -33,6 +33,8 @@ pub struct HandshakeMessage {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<std::collections::HashMap<String, serde_json::Value>>,
+    #[serde(default)]
+    pub inferred: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -636,83 +638,86 @@ impl TrackedStream {
         use std::collections::HashMap;
         use serde_json::json;
 
-        // In TLS 1.3, after ServerHello + ChangeCipherSpec from server,
-        // the next encrypted record contains: EncryptedExtensions + Certificate + CertificateVerify + Finished
         if self.encrypted_records_from_server > 0 && !self.handshake_complete {
-            // Add EncryptedExtensions
             let mut fields = HashMap::new();
             fields.insert("encrypted".to_string(), json!(true));
             fields.insert("note".to_string(), json!("Extensions sent encrypted (TLS 1.3)"));
+            fields.insert("inferred_reason".to_string(), json!("Encrypted in TLS 1.3; actual message not captured from wire"));
 
             self.messages.push(HandshakeMessage {
                 sequence: self.sequence,
                 direction: "Server → Client".to_string(),
                 message_type: "EncryptedExtensions".to_string(),
-                size: 0, // Encrypted, size unknown
+                size: 0,
                 description: "Server sends encrypted TLS extensions (TLS 1.3)".to_string(),
                 fields: Some(fields),
+                inferred: true,
             });
             self.sequence += 1;
 
-            // Add Certificate
             let mut fields = HashMap::new();
             fields.insert("encrypted".to_string(), json!(true));
             fields.insert("note".to_string(), json!("Certificate message encrypted (TLS 1.3)"));
+            fields.insert("inferred_reason".to_string(), json!("Encrypted in TLS 1.3; actual message not captured from wire"));
 
             self.messages.push(HandshakeMessage {
                 sequence: self.sequence,
                 direction: "Server → Client".to_string(),
                 message_type: "Certificate".to_string(),
-                size: 0, // Encrypted, size unknown
+                size: 0,
                 description: "Server presents certificate chain for authentication".to_string(),
                 fields: Some(fields),
+                inferred: true,
             });
             self.sequence += 1;
 
-            // Add CertificateVerify
             let mut fields = HashMap::new();
             fields.insert("encrypted".to_string(), json!(true));
             fields.insert("note".to_string(), json!("Signature proving key ownership (TLS 1.3)"));
+            fields.insert("inferred_reason".to_string(), json!("Encrypted in TLS 1.3; actual message not captured from wire"));
 
             self.messages.push(HandshakeMessage {
                 sequence: self.sequence,
                 direction: "Server → Client".to_string(),
                 message_type: "CertificateVerify".to_string(),
-                size: 0, // Encrypted, size unknown
+                size: 0,
                 description: "Server proves possession of private key via signature".to_string(),
                 fields: Some(fields),
+                inferred: true,
             });
             self.sequence += 1;
 
-            // Add Finished
             let mut fields = HashMap::new();
             fields.insert("encrypted".to_string(), json!(true));
             fields.insert("note".to_string(), json!("MAC of all handshake messages (TLS 1.3)"));
+            fields.insert("inferred_reason".to_string(), json!("Encrypted in TLS 1.3; actual message not captured from wire"));
 
             self.messages.push(HandshakeMessage {
                 sequence: self.sequence,
                 direction: "Server → Client".to_string(),
                 message_type: "Finished".to_string(),
-                size: 0, // Encrypted, size unknown
+                size: 0,
                 description: "Handshake complete, includes MAC of all messages".to_string(),
                 fields: Some(fields),
+                inferred: true,
             });
             self.sequence += 1;
         }
 
-        // Client Finished
         if self.encrypted_records_from_client > 0 && self.encrypted_records_from_server > 0 {
             let mut fields = HashMap::new();
             fields.insert("encrypted".to_string(), json!(true));
             fields.insert("note".to_string(), json!("MAC of all handshake messages (TLS 1.3)"));
+            fields.insert("inferred_reason".to_string(), json!("Encrypted in TLS 1.3; actual message not captured from wire"));
 
             self.messages.push(HandshakeMessage {
                 sequence: self.sequence,
                 direction: "Client → Server".to_string(),
                 message_type: "Finished".to_string(),
-                size: 0, // Encrypted, size unknown
+                size: 0,
                 description: "Client handshake complete with MAC".to_string(),
                 fields: Some(fields),
+                inferred: true,
             });
             self.sequence += 1;
         }
@@ -771,6 +776,7 @@ impl TrackedStream {
                             size: total_msg_size,
                             description,
                             fields,
+                            inferred: false,
                         });
 
                         self.sequence += 1;
@@ -792,6 +798,7 @@ impl TrackedStream {
                         size: length,
                         description: "Cipher suite change notification (TLS 1.2)".to_string(),
                         fields: None,
+                        inferred: false,
                     });
 
                     self.sequence += 1;

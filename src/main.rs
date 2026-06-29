@@ -300,6 +300,17 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
             println!("   ├─ Key ({}b):  {}", secrets.rx_secrets.key_size_bits, secrets.rx_secrets.key_hex);
             println!("   └─ IV (96b):   {}", secrets.rx_secrets.iv_hex);
             println!();
+            println!("   Decryption Capabilities:");
+            println!("   ╔ Can Decrypt:");
+            for capability in &secrets.decryption_capabilities.can_decrypt {
+                println!("   ║  {}", capability);
+            }
+            println!("   ╠ Cannot Decrypt:");
+            for limitation in &secrets.decryption_capabilities.cannot_decrypt {
+                println!("   ║  {}", limitation);
+            }
+            println!("   ╚ Why: {}", secrets.decryption_capabilities.explanation);
+            println!();
         }
     }
 }

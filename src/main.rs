@@ -169,12 +169,15 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
         } else {
             "No".to_string()
         };
-        let pqc_status = if info.post_quantum_analysis.post_quantum_readiness.quantum_safe {
-            "✓ Quantum-Safe"
-        } else if info.post_quantum_analysis.hybrid_approach_available {
-            "~ Hybrid Ready"
+        let pqc = &info.post_quantum_analysis;
+        let pqc_status = if pqc.post_quantum_readiness.quantum_safe {
+            "✓ Quantum-Safe".to_string()
+        } else if pqc.hybrid_ready {
+            "~ Hybrid (partial)".to_string()
+        } else if pqc.hybrid_approach_available {
+            "⚠ Needs Hybrid".to_string()
         } else {
-            "✗ Not Ready"
+            "✗ Not Ready".to_string()
         };
 
         println!("{:<20} {:<15} {:<35} {:<15} {:<20} {:<25}",

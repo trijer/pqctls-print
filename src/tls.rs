@@ -207,6 +207,25 @@ pub struct ExtensionInfo {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PostQuantumAnalysis {
+    /// Whether server already offers hybrid PQC (partial PQC support)
+    ///
+    /// True when: Server supports either PQC key exchange OR PQC signatures (but not both)
+    /// False when: Server has NO PQC support or is ALREADY fully quantum-safe
+    ///
+    /// This represents the SERVER'S CURRENT CAPABILITY (what it actually offers).
+    pub hybrid_ready: bool,
+
+    /// Whether a hybrid PQC migration approach is needed/recommended
+    ///
+    /// True when: Server is NOT quantum-safe and should migrate to hybrid
+    /// False when: Server is ALREADY quantum-safe (no migration needed)
+    ///
+    /// This represents the RECOMMENDED NEXT STEP (what to do if not quantum-safe).
+    ///
+    /// Three-way distinction:
+    /// - quantum_safe=true, hybrid_ready=false: Already fully PQC-protected (no action)
+    /// - quantum_safe=false, hybrid_ready=true: Partially PQC-protected (add missing component)
+    /// - quantum_safe=false, hybrid_ready=false: No PQC yet (migrate to hybrid)
     pub hybrid_approach_available: bool,
     pub pqc_algorithms_available: Vec<String>,
     pub recommended_hybrid_suites: Vec<String>,
@@ -1589,6 +1608,7 @@ fn build_post_quantum_analysis(encryption_negotiation: &EncryptionNegotiation) -
     };
 
     PostQuantumAnalysis {
+        hybrid_ready,
         hybrid_approach_available: !quantum_safe,
         pqc_algorithms_available,
         recommended_hybrid_suites,

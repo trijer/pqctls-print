@@ -1261,7 +1261,7 @@ fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<std::collections:
                 .map(|b| format!("{:02x}", b))
                 .collect::<Vec<_>>()
                 .join("");
-            fields.insert("random".to_string(), json!(random[..16].to_string() + "..."));
+            fields.insert("random".to_string(), json!(random));
 
             // Session ID Length
             if data.len() > 34 {
@@ -1291,7 +1291,7 @@ fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<std::collections:
                 .map(|b| format!("{:02x}", b))
                 .collect::<Vec<_>>()
                 .join("");
-            fields.insert("random".to_string(), json!(random[..16].to_string() + "..."));
+            fields.insert("random".to_string(), json!(random));
 
             // Session ID
             if data.len() > 34 {

@@ -9,7 +9,7 @@ use x509_parser::prelude::*;
 use asn1_rs::Oid;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct HandshakeInfo {
+pub struct TLSAnalysisReport {
     pub host: String,
     pub port: u16,
     pub timestamp: u64,
@@ -266,7 +266,7 @@ pub struct MigrationStrategy {
     pub action_items: Vec<String>,
 }
 
-pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
+pub async fn analyze_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
     let host_owned = host.to_string();
 
     tokio::task::spawn_blocking(move || {
@@ -276,7 +276,7 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
     .map_err(|e| anyhow!("Blocking task error: {}", e))?
 }
 
-fn perform_tls_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
+fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
     let host_owned = host.to_string();
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
@@ -371,7 +371,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
 
     let post_quantum_analysis = build_post_quantum_analysis(&encryption_negotiation);
 
-    Ok(HandshakeInfo {
+    Ok(TLSAnalysisReport {
         host: host_owned,
         port,
         timestamp,

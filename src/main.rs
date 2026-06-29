@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
 
     fs::create_dir_all(&output_dir)?;
 
-    let mut results = Vec::new();
+    let mut reports = Vec::new();
 
     // Analyze each URL
     for url_str in &url_strings {
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
                 fs::write(&filepath, &json)?;
                 eprintln!("   ✓ Saved: {}", filepath.display());
 
-                results.push(info);
+                reports.push(info);
             }
             Err(e) => {
                 eprintln!("   ✗ Error: {}", e);
@@ -54,17 +54,17 @@ async fn main() -> Result<()> {
         }
     }
 
-    if results.is_empty() {
+    if reports.is_empty() {
         eprintln!("No successful analyses");
         return Ok(());
     }
 
     // Display comparison table
     println!("\n");
-    print_comparison_table(&results);
+    print_comparison_table(&reports);
 
     // Save comparison JSON
-    let comparison_json = serde_json::to_string_pretty(&results)?;
+    let comparison_json = serde_json::to_string_pretty(&reports)?;
     let comparison_file = format!("tls_comparison_{}.json", chrono::Local::now().format("%Y%m%d_%H%M%S"));
     let comparison_path = output_dir.join(&comparison_file);
     fs::write(&comparison_path, comparison_json)?;
@@ -96,7 +96,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, Vec<String>)> {
     Ok((output_dir, urls))
 }
 
-async fn analyze_url(url_str: &str) -> Result<(String, tls::HandshakeInfo)> {
+async fn analyze_url(url_str: &str) -> Result<(String, tls::TLSAnalysisReport)> {
     let url = Url::parse(url_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse URL '{}': {}", url_str, e))?;
 
@@ -144,7 +144,7 @@ fn generate_cert_summary(cert: &tls::CertificateInfo, is_self_signed: bool) -> S
     parts.join(" • ")
 }
 
-fn print_comparison_table(results: &[tls::HandshakeInfo]) {
+fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
     println!("╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗");
     println!("║                                              TLS CONFIGURATION COMPARISON                                                                ║");
     println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");

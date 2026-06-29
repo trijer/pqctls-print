@@ -266,6 +266,16 @@ pub struct MigrationStrategy {
 
 pub async fn analyze_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
     let host_owned = host.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        perform_tls_handshake(&host_owned, port)
+    })
+    .await
+    .map_err(|e| anyhow!("Blocking task error: {}", e))?
+}
+
+fn perform_tls_handshake(host: &str, port: u16) -> Result<HandshakeInfo> {
+    let host_owned = host.to_string();
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
         .as_secs();

@@ -146,7 +146,7 @@ fn generate_cert_summary(cert: &tls::CertificateInfo, is_self_signed: bool) -> S
 
 fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
     println!("╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗");
-    println!("║                                              TLS CONFIGURATION COMPARISON                                                                ║");
+    println!("║                                                TLS CONFIGURATION COMPARISON                                                                ║");
     println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
 
     // Print header
@@ -275,13 +275,33 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
             if pq.post_quantum_readiness.quantum_safe { "✓ Yes" } else { "✗ No" });
 
         println!("   Status: {}", pq.post_quantum_readiness.recommendation);
-        println!("   Hybrid Ready: {}", if pq.hybrid_approach_available { "Yes" } else { "No" });
         println!("   Recommended: {}", &pq.hybrid_key_exchange.post_quantum_key_agreement.recommended);
         println!("   Timeline: {}", &pq.migration_strategy.timeline);
         println!();
     }
 
-    println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
+    println!("\n🔑 Extracted Session Secrets (dangerous_extract_secrets)\n");
+
+    // Print extracted secrets
+    for (idx, info) in results.iter().enumerate() {
+        if let Some(secrets) = &info.extracted_secrets {
+            println!("{}. {}", idx + 1, info.host);
+            println!("   Note: {}", secrets.note);
+            println!();
+            println!("   TX (Transmit) Secrets:");
+            println!("   ├─ Sequence #: {}", secrets.tx_secrets.sequence_number);
+            println!("   ├─ Algorithm:  {}", secrets.tx_secrets.algorithm);
+            println!("   ├─ Key ({}b):  {}", secrets.tx_secrets.key_size_bits, secrets.tx_secrets.key_hex);
+            println!("   └─ IV (96b):   {}", secrets.tx_secrets.iv_hex);
+            println!();
+            println!("   RX (Receive) Secrets:");
+            println!("   ├─ Sequence #: {}", secrets.rx_secrets.sequence_number);
+            println!("   ├─ Algorithm:  {}", secrets.rx_secrets.algorithm);
+            println!("   ├─ Key ({}b):  {}", secrets.rx_secrets.key_size_bits, secrets.rx_secrets.key_hex);
+            println!("   └─ IV (96b):   {}", secrets.rx_secrets.iv_hex);
+            println!();
+        }
+    }
 }
 
 fn truncate(s: &str, max_len: usize) -> String {

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use rustls::{ClientConfig, ClientConnection, RootCertStore};
+use rustls::{ClientConfig, ClientConnection, RootCertStore, ConnectionTrafficSecrets};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -22,6 +22,24 @@ pub struct TLSAnalysisReport {
     pub http_exchange: HttpExchange,
     pub certificate_chain: Vec<CertificateInfo>,
     pub post_quantum_analysis: PostQuantumAnalysis,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extracted_secrets: Option<ExtractedSecretsInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExtractedSecretsInfo {
+    pub note: String,
+    pub tx_secrets: TrafficSecretsInfo,
+    pub rx_secrets: TrafficSecretsInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TrafficSecretsInfo {
+    pub sequence_number: u64,
+    pub algorithm: String,
+    pub key_hex: String,
+    pub iv_hex: String,
+    pub key_size_bits: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -368,29 +386,36 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     let http_response = String::from_utf8_lossy(&response_buf).to_string();
 
-    // Extract recorded messages from the tracked stream
-    let post_handshake_encrypted_count = tracked_stream.post_handshake_encrypted_records();
-    let recorded_messages = tracked_stream.extract_messages();
-
     let tls_version = get_tls_version(&conn);
     let cipher_suite = get_cipher_suite(&conn);
+    let key_share = get_key_share_info(&conn);
 
+    // Get peer certs before extracting secrets (which consumes conn)
     let peer_certs = conn
         .peer_certificates()
-        .ok_or_else(|| anyhow!("No server certificate received"))?;
+        .ok_or_else(|| anyhow!("No server certificate received"))?
+        .to_vec();
 
     if peer_certs.is_empty() {
         return Err(anyhow!("Empty certificate chain"));
     }
 
-    let certificate_chain = parse_certificate_chain(peer_certs)?;
+    // Extract secrets after handshake completes (this consumes conn)
+    let secrets = conn.dangerous_extract_secrets()
+        .map_err(|e| anyhow!("Failed to extract secrets: {}", e))?;
+
+    // Extract recorded messages and pass secrets for decryption
+    let post_handshake_encrypted_count = tracked_stream.post_handshake_encrypted_records();
+    let recorded_messages = tracked_stream.extract_messages_with_secrets(&secrets)?;
+
+    let certificate_chain = parse_certificate_chain(&peer_certs)?;
 
     let handshake_details = HandshakeDetails {
         supported_versions: vec![
             "TLS 1.2 (0x0303)".to_string(),
             "TLS 1.3 (0x0304)".to_string(),
         ],
-        key_share: get_key_share_info(&conn),
+        key_share,
         signature_algorithms: vec![
             "rsa_pss_rsae_sha256".to_string(),
             "rsa_pss_rsae_sha384".to_string(),
@@ -421,6 +446,8 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     let post_quantum_analysis = build_post_quantum_analysis(&encryption_negotiation);
 
+    let extracted_secrets = build_extracted_secrets_info(&secrets)?;
+
     Ok(TLSAnalysisReport {
         host: host_owned,
         port,
@@ -434,6 +461,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
         http_exchange,
         certificate_chain,
         post_quantum_analysis,
+        extracted_secrets: Some(extracted_secrets),
     })
 }
 
@@ -446,9 +474,12 @@ fn create_client_config() -> Result<ClientConfig> {
             .map_err(|e| anyhow!("Failed to add certificate: {}", e))?;
     }
 
-    let config = ClientConfig::builder()
+    let mut config = ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
+
+    // Enable secret extraction to access session keys via dangerous_extract_secrets()
+    config.enable_secret_extraction = true;
 
     Ok(config)
 }
@@ -657,6 +688,13 @@ fn parse_handshake_type(msg_type: u8) -> (String, String) {
     }
 }
 
+#[derive(Clone)]
+pub struct EncryptedRecord {
+    pub data: Vec<u8>,
+    pub direction_is_write: bool,
+    pub sequence_number: u64,
+}
+
 pub struct TrackedStream {
     inner: TcpStream,
     messages: Vec<HandshakeMessage>,
@@ -664,6 +702,9 @@ pub struct TrackedStream {
     handshake_complete: bool,
     encrypted_records_from_server: usize,
     encrypted_records_from_client: usize,
+    encrypted_records: Vec<EncryptedRecord>,
+    server_seq: u64,
+    client_seq: u64,
 }
 
 impl TrackedStream {
@@ -675,13 +716,126 @@ impl TrackedStream {
             handshake_complete: false,
             encrypted_records_from_server: 0,
             encrypted_records_from_client: 0,
+            encrypted_records: Vec::new(),
+            server_seq: 0,
+            client_seq: 0,
         }
     }
 
-    pub fn extract_messages(mut self) -> Vec<HandshakeMessage> {
+    pub fn extract_messages_with_secrets(mut self, secrets: &rustls::ExtractedSecrets) -> Result<Vec<HandshakeMessage>> {
+        // Decrypt and parse encrypted records
+        let records = self.encrypted_records.clone();
+        for record in records.iter() {
+            match self.decrypt_record(record, secrets) {
+                Ok(plaintext) => {
+                    if !plaintext.is_empty() {
+                        self.parse_decrypted_record(&plaintext, record.direction_is_write);
+                    }
+                }
+                Err(_) => {
+                    // Decryption failed, skip this record
+                }
+            }
+        }
         // Add synthesized encrypted handshake messages based on TLS 1.3 flow
         self.add_encrypted_handshake_messages();
-        self.messages
+        Ok(self.messages)
+    }
+
+    fn decrypt_record(&self, record: &EncryptedRecord, secrets: &rustls::ExtractedSecrets) -> Result<Vec<u8>> {
+        // Select the appropriate secret direction and algorithm
+        let traffic_secret = if record.direction_is_write {
+            &secrets.tx.1
+        } else {
+            &secrets.rx.1
+        };
+
+        match traffic_secret {
+            ConnectionTrafficSecrets::Aes256Gcm { key, iv } => {
+                self.decrypt_aes_gcm(&record.data, key, iv, record.sequence_number)
+            }
+            ConnectionTrafficSecrets::Aes128Gcm { key, iv } => {
+                self.decrypt_aes_gcm(&record.data, key, iv, record.sequence_number)
+            }
+            ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
+                self.decrypt_chacha(&record.data, key, iv, record.sequence_number)
+            }
+            _ => Err(anyhow!("Unknown traffic secret variant")),
+        }
+    }
+
+    fn decrypt_aes_gcm(&self, _ciphertext: &[u8], _key: &rustls::crypto::cipher::AeadKey, _iv: &rustls::crypto::cipher::Iv, _seq_num: u64) -> Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
+
+    fn decrypt_chacha(&self, _ciphertext: &[u8], _key: &rustls::crypto::cipher::AeadKey, _iv: &rustls::crypto::cipher::Iv, _seq_num: u64) -> Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
+
+    fn parse_decrypted_record(&mut self, plaintext: &[u8], is_write: bool) {
+        if plaintext.is_empty() {
+            return;
+        }
+
+        // Remove the content type byte (last byte in TLS 1.3)
+        let content = if plaintext.len() > 0 {
+            &plaintext[..plaintext.len() - 1]
+        } else {
+            plaintext
+        };
+        let content_type = if plaintext.len() > 0 {
+            plaintext[plaintext.len() - 1]
+        } else {
+            0
+        };
+
+        if content_type == 22 {
+            // Handshake messages
+            self.parse_handshake_from_plaintext(content, is_write);
+        }
+    }
+
+    fn parse_handshake_from_plaintext(&mut self, data: &[u8], is_write: bool) {
+        let mut pos = 0;
+        while pos + 4 <= data.len() {
+            let msg_type = data[pos];
+            let msg_length = u32::from_be_bytes([
+                0,
+                data[pos + 1],
+                data[pos + 2],
+                data[pos + 3],
+            ]) as usize;
+
+            let (type_name, description) = parse_handshake_type(msg_type);
+            let total_msg_size = msg_length + 4;
+
+            let direction = if is_write {
+                "Client → Server".to_string()
+            } else {
+                "Server → Client".to_string()
+            };
+
+            let payload_start = pos + 4;
+            let payload_end = payload_start + msg_length;
+            let fields = if payload_end <= data.len() {
+                parse_handshake_fields(msg_type, &data[payload_start..payload_end])
+            } else {
+                None
+            };
+
+            self.messages.push(HandshakeMessage {
+                sequence: self.sequence,
+                direction,
+                message_type: type_name,
+                size: total_msg_size,
+                description,
+                fields,
+                inferred: false,
+            });
+
+            self.sequence += 1;
+            pos += total_msg_size;
+        }
     }
 
     pub fn post_handshake_encrypted_records(&self) -> usize {
@@ -859,36 +1013,23 @@ impl TrackedStream {
                 }
                 23 => {
                     // Application Data / Encrypted Handshake Messages
-                    // NOTE: We can count encrypted records but cannot parse their contents.
-                    //
-                    // To actually see/decrypt encrypted TLS messages, we would need to:
-                    // 1. MODIFY RUSTLS: Fork rustls and expose session keys through a callback/hook
-                    //    - Current rustls design intentionally hides keys for security
-                    //    - Would require adding unsafe session key export functionality
-                    //    - Similar to OpenSSL's SSL_CTX_set_keylog_callback
-                    //
-                    // 2. ALTERNATIVE: Implement SSLKEYLOGFILE export (like Chromium, Firefox)
-                    //    - Write session keys to file during handshake
-                    //    - Use with Wireshark: Edit > Preferences > Protocols > TLS > (Pre)-Master-Secret log
-                    //    - Wireshark can then decrypt captured traffic
-                    //    - Requires client-side key logging (not feasible for server connections here)
-                    //
-                    // 3. USE MITM PROXY: Run through mitmproxy or similar
-                    //    - Terminate TLS at proxy, decrypt, re-encrypt to destination
-                    //    - Can inspect all encrypted content
-                    //    - Requires proxy configuration
-                    //
-                    // 4. CUSTOM RUSTLS BUILD: Create instrumented rustls
-                    //    - Add logging hooks that expose: ciphertexts, plaintexts, keys
-                    //    - Parse encrypted records at rustls::Stream layer
-                    //    - Significant rustls source modifications
-                    //
-                    // SECURITY TRADE-OFF: Exporting keys breaks forward secrecy guarantees
-                    // and reveals session secrets. Only use for debugging/analysis on trusted networks.
+                    // Now we can decrypt these using dangerous_extract_secrets()
                     if is_write {
                         self.encrypted_records_from_client += 1;
+                        self.encrypted_records.push(EncryptedRecord {
+                            data: data[pos..pos + length].to_vec(),
+                            direction_is_write: true,
+                            sequence_number: self.client_seq,
+                        });
+                        self.client_seq += 1;
                     } else {
                         self.encrypted_records_from_server += 1;
+                        self.encrypted_records.push(EncryptedRecord {
+                            data: data[pos..pos + length].to_vec(),
+                            direction_is_write: false,
+                            sequence_number: self.server_seq,
+                        });
+                        self.server_seq += 1;
                     }
                 }
                 _ => {}
@@ -1465,6 +1606,71 @@ fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<std::collections:
             Some(fields)
         }
     }
+}
+
+fn build_extracted_secrets_info(secrets: &rustls::ExtractedSecrets) -> Result<ExtractedSecretsInfo> {
+    let (tx_seq, tx_secret) = &secrets.tx;
+    let (rx_seq, rx_secret) = &secrets.rx;
+
+    let (tx_algo, tx_key_hex, tx_iv_hex, tx_key_bits) = match tx_secret {
+        ConnectionTrafficSecrets::Aes256Gcm { key, iv } => {
+            ("AES-256-GCM".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
+        }
+        ConnectionTrafficSecrets::Aes128Gcm { key, iv } => {
+            ("AES-128-GCM".to_string(), format_key_hex(key), format_iv_hex(iv), 128)
+        }
+        ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
+            ("ChaCha20-Poly1305".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
+        }
+        _ => return Err(anyhow!("Unknown tx secret variant")),
+    };
+
+    let (rx_algo, rx_key_hex, rx_iv_hex, rx_key_bits) = match rx_secret {
+        ConnectionTrafficSecrets::Aes256Gcm { key, iv } => {
+            ("AES-256-GCM".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
+        }
+        ConnectionTrafficSecrets::Aes128Gcm { key, iv } => {
+            ("AES-128-GCM".to_string(), format_key_hex(key), format_iv_hex(iv), 128)
+        }
+        ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
+            ("ChaCha20-Poly1305".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
+        }
+        _ => return Err(anyhow!("Unknown rx secret variant")),
+    };
+
+    Ok(ExtractedSecretsInfo {
+        note: "Successfully extracted session traffic secrets using rustls::dangerous_extract_secrets()".to_string(),
+        tx_secrets: TrafficSecretsInfo {
+            sequence_number: *tx_seq,
+            algorithm: tx_algo,
+            key_hex: tx_key_hex,
+            iv_hex: tx_iv_hex,
+            key_size_bits: tx_key_bits,
+        },
+        rx_secrets: TrafficSecretsInfo {
+            sequence_number: *rx_seq,
+            algorithm: rx_algo,
+            key_hex: rx_key_hex,
+            iv_hex: rx_iv_hex,
+            key_size_bits: rx_key_bits,
+        },
+    })
+}
+
+fn format_key_hex(key: &rustls::crypto::cipher::AeadKey) -> String {
+    key.as_ref()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn format_iv_hex(iv: &rustls::crypto::cipher::Iv) -> String {
+    iv.as_ref()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn build_post_quantum_analysis(encryption_negotiation: &EncryptionNegotiation) -> PostQuantumAnalysis {

@@ -440,8 +440,8 @@ fn parse_x509_cert(cert_der: &[u8]) -> Result<CertificateInfo> {
     let (_, cert) = parse_x509_certificate(cert_der)
         .map_err(|e| anyhow!("Failed to parse X.509 certificate: {}", e))?;
 
-    let subject = format_x509_name(&cert.subject());
-    let issuer = format_x509_name(&cert.issuer());
+    let subject = cert.subject().to_string();
+    let issuer = cert.issuer().to_string();
 
     let not_before = format!("{}", cert.validity().not_before);
     let not_after = format!("{}", cert.validity().not_after);
@@ -450,7 +450,7 @@ fn parse_x509_cert(cert_der: &[u8]) -> Result<CertificateInfo> {
 
     let fingerprint_sha256 = compute_sha256_fingerprint(cert_der);
 
-    let (key_type, key_size) = ("RSA/EC".to_string(), Some(2048));
+    let (key_type, key_size) = extract_key_info(&cert)?;
 
     let subject_alt_names = extract_san(&cert)?;
 
@@ -470,8 +470,36 @@ fn parse_x509_cert(cert_der: &[u8]) -> Result<CertificateInfo> {
     })
 }
 
-fn format_x509_name(name: &X509Name) -> String {
-    name.to_string()
+fn extract_key_info(cert: &X509Certificate) -> Result<(String, Option<usize>)> {
+    let pk_algo = &cert.public_key().algorithm.algorithm;
+
+    let key_type = match pk_algo.to_string().as_str() {
+        "1.2.840.113549.1.1.1" | "rsaEncryption" => "RSA".to_string(),
+        "1.2.840.10045.2.1" | "id-ecPublicKey" => "ECDSA".to_string(),
+        "1.3.101.112" => "EdDSA (Ed25519)".to_string(),
+        "1.3.101.111" => "EdDSA (Ed448)".to_string(),
+        oid_str => format!("Other ({})", oid_str),
+    };
+
+    let key_size = match pk_algo.to_string().as_str() {
+        "1.2.840.113549.1.1.1" | "rsaEncryption" => {
+            cert.public_key().raw.len().checked_mul(8).map(|bits| {
+                if bits > 256 { bits - 24 } else { bits }
+            })
+        }
+        "1.2.840.10045.2.1" | "id-ecPublicKey" => {
+            let bits = cert.public_key().raw.len() * 8;
+            match bits {
+                264 => Some(256),
+                392 => Some(384),
+                528 => Some(521),
+                _ => Some(bits),
+            }
+        }
+        _ => None,
+    };
+
+    Ok((key_type, key_size))
 }
 
 fn compute_sha256_fingerprint(cert_der: &[u8]) -> String {
@@ -485,6 +513,8 @@ fn compute_sha256_fingerprint(cert_der: &[u8]) -> String {
 }
 
 fn extract_san(cert: &X509Certificate) -> Result<Vec<String>> {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
     let mut sans = Vec::new();
 
     if let Ok(Some(ext)) = cert.subject_alternative_name() {
@@ -494,10 +524,18 @@ fn extract_san(cert: &X509Certificate) -> Result<Vec<String>> {
                     sans.push(name.to_string());
                 }
                 GeneralName::IPAddress(ip) => {
-                    sans.push(format!("IP:{}", ip.iter()
-                        .map(|b| b.to_string())
-                        .collect::<Vec<_>>()
-                        .join(".")));
+                    let ip_str = if ip.len() == 4 {
+                        let ipv4 = Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]);
+                        format!("IP:{}", ipv4)
+                    } else if ip.len() == 16 {
+                        let mut arr = [0u8; 16];
+                        arr.copy_from_slice(&ip);
+                        let ipv6 = Ipv6Addr::from(arr);
+                        format!("IP:{}", ipv6)
+                    } else {
+                        format!("IP:(invalid length {})", ip.len())
+                    };
+                    sans.push(ip_str);
                 }
                 _ => {}
             }
@@ -538,19 +576,21 @@ fn get_extension_name(oid: &Oid) -> String {
 
 fn parse_handshake_type(msg_type: u8) -> (String, String) {
     match msg_type {
-        0 => ("HelloRequest".to_string(), "Server requests renegotiation".to_string()),
+        0 => ("HelloRequest".to_string(), "Server requests renegotiation (TLS 1.2)".to_string()),
         1 => ("ClientHello".to_string(), "Client initiates TLS handshake with supported versions, ciphers, and extensions".to_string()),
         2 => ("ServerHello".to_string(), "Server selects TLS version and cipher suite from client options".to_string()),
-        3 => ("NewSessionTicket".to_string(), "Server provides session resumption ticket (TLS 1.3)".to_string()),
-        4 => ("EncryptedExtensions".to_string(), "Server sends encrypted TLS extensions (TLS 1.3)".to_string()),
-        5 => ("Certificate".to_string(), "Server presents certificate chain for authentication".to_string()),
-        6 => ("ServerKeyExchange".to_string(), "Server provides key exchange parameters (TLS 1.2)".to_string()),
+        3 => ("HelloRetryRequest".to_string(), "Server requests retry with different parameters (TLS 1.3)".to_string()),
+        4 => ("NewSessionTicket".to_string(), "Server provides session resumption ticket (TLS 1.3)".to_string()),
+        5 => ("EndOfEarlyData".to_string(), "Client signals end of early data (TLS 1.3)".to_string()),
+        6 => ("EncryptedExtensions".to_string(), "Server sends encrypted TLS extensions (TLS 1.3)".to_string()),
         7 => ("CertificateRequest".to_string(), "Server requests client certificate (optional)".to_string()),
-        8 => ("ServerHelloDone".to_string(), "Server signals end of handshake messages (TLS 1.2)".to_string()),
-        9 => ("CertificateVerify".to_string(), "Client/Server proves possession of private key via signature".to_string()),
-        10 => ("ClientKeyExchange".to_string(), "Client sends key exchange parameters (TLS 1.2)".to_string()),
-        11 => ("Finished".to_string(), "Handshake complete, includes MAC of all messages".to_string()),
-        12 => ("KeyUpdate".to_string(), "Update traffic keys (TLS 1.3)".to_string()),
+        8 => ("Certificate".to_string(), "Server presents certificate chain for authentication".to_string()),
+        9 => ("ServerKeyExchange".to_string(), "Server provides key exchange parameters (TLS 1.2)".to_string()),
+        10 => ("CertificateVerify".to_string(), "Client/Server proves possession of private key via signature".to_string()),
+        11 => ("ClientKeyExchange".to_string(), "Client sends key exchange parameters (TLS 1.2)".to_string()),
+        12 => ("Finished".to_string(), "Handshake complete, includes MAC of all messages".to_string()),
+        13 => ("CertificateStatus".to_string(), "Server provides OCSP response (TLS 1.2)".to_string()),
+        14 => ("KeyUpdate".to_string(), "Update traffic keys (TLS 1.3)".to_string()),
         _ => (format!("Unknown({})", msg_type), "Unknown message type".to_string()),
     }
 }
@@ -925,11 +965,7 @@ fn build_encryption_negotiation(cipher_suite: &str, client_random: &str, server_
                 key_bits: 256,
                 block_size: 128,
             },
-            mac_algorithm: Some(MacAlgorithm {
-                algorithm: "SHA-384".to_string(),
-                hash_bits: 384,
-                output_bits: 384,
-            }),
+            mac_algorithm: None,
             aead_details: Some(AeadDetails {
                 algorithm: "AES-256-GCM".to_string(),
                 key_bits: 256,
@@ -1011,11 +1047,7 @@ fn build_encryption_negotiation(cipher_suite: &str, client_random: &str, server_
                 key_bits: 128,
                 block_size: 128,
             },
-            mac_algorithm: Some(MacAlgorithm {
-                algorithm: "SHA-256".to_string(),
-                hash_bits: 256,
-                output_bits: 256,
-            }),
+            mac_algorithm: None,
             aead_details: Some(AeadDetails {
                 algorithm: "AES-128-GCM".to_string(),
                 key_bits: 128,
@@ -1272,7 +1304,7 @@ fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<std::collections:
             }
             Some(fields)
         }
-        5 => {
+        8 => {
             // Certificate
             if data.len() < 3 {
                 return None;
@@ -1295,12 +1327,7 @@ fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<std::collections:
             fields.insert("certificate_count".to_string(), json!(cert_count));
             Some(fields)
         }
-        8 => {
-            // ServerHelloDone - no fields
-            fields.insert("message".to_string(), json!("No additional fields"));
-            Some(fields)
-        }
-        11 => {
+        12 => {
             // Finished - contains MAC/verification_data
             fields.insert("verification_data_length".to_string(), json!(data.len()));
             if data.len() > 0 {

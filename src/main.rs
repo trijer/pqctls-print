@@ -131,9 +131,10 @@ fn print_comparison_table(results: &[tls::HandshakeInfo]) {
             .map(|a| a.key_bits.to_string())
             .unwrap_or_else(|| "N/A".to_string());
         let resumption = if info.session_ticket.is_session_resumption_supported {
-            "Yes (7 days)"
+            let days = info.session_ticket.ticket_lifetime_seconds / 86400;
+            format!("Yes ({} days)", days)
         } else {
-            "No"
+            "No".to_string()
         };
         let pqc_status = if info.post_quantum_analysis.post_quantum_readiness.quantum_safe {
             "✓ Quantum-Safe"
@@ -249,8 +250,18 @@ fn print_comparison_table(results: &[tls::HandshakeInfo]) {
 
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len - 3])
+        return s.to_string();
     }
+    if max_len < 3 {
+        return s.to_string();
+    }
+    let target_len = max_len - 3;
+    let mut truncated = String::new();
+    for (idx, ch) in s.char_indices() {
+        if idx >= target_len {
+            break;
+        }
+        truncated.push(ch);
+    }
+    format!("{}...", truncated)
 }

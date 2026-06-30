@@ -6,9 +6,13 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use url::Url;
+use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+     // Initialize the subscriber to log formatted traces to stdout
+     tracing_subscriber::fmt::init();
+
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .map_err(|_| anyhow::anyhow!("Failed to install aws-lc-rs crypto provider"))?;

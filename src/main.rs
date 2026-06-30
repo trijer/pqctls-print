@@ -9,9 +9,9 @@ use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    rustls::crypto::ring::default_provider()
+    rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
-        .map_err(|_| anyhow::anyhow!("Failed to install rustls crypto provider"))?;
+        .map_err(|_| anyhow::anyhow!("Failed to install aws-lc-rs crypto provider"))?;
 
     let args: Vec<String> = env::args().collect();
 

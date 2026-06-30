@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::{Result, TlsError};
 pub use types::*;
 use certificates::parse_certificate_chain;
-use encryption::{build_encryption_negotiation, build_extracted_secrets_info};
+use encryption::build_encryption_negotiation;
 use http::build_http_exchange;
 use pqc::build_post_quantum_analysis;
 use session::build_session_ticket_info;
@@ -116,14 +116,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
         return Err(TlsError::EmptyCertificateChain);
     }
 
-    let secrets = conn.dangerous_extract_secrets().map_err(|e| {
-        TlsError::SecretExtraction {
-            reason: e.to_string(),
-        }
-    })?;
-
-    let post_handshake_encrypted_count = tracked_stream.post_handshake_encrypted_records();
-    let (recorded_messages, debug_info) = tracked_stream.extract_messages_with_secrets(&secrets)?;
+    let recorded_messages = tracked_stream.extract_messages();
 
     let certificate_chain = parse_certificate_chain(&peer_certs)?;
 
@@ -154,13 +147,11 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     let encryption_negotiation = build_encryption_negotiation(&cipher_suite, &client_random, &server_random)?;
 
-    let session_ticket = build_session_ticket_info(&tls_version, &recorded_messages, post_handshake_encrypted_count > 0)?;
+    let session_ticket = build_session_ticket_info(&tls_version, &recorded_messages, false)?;
 
     let http_exchange = build_http_exchange(&http_request, &http_response)?;
 
     let post_quantum_analysis = build_post_quantum_analysis(&encryption_negotiation, &recorded_messages);
-
-    let extracted_secrets = build_extracted_secrets_info(&secrets)?;
 
     Ok(TLSAnalysisReport {
         host: host_owned,
@@ -175,8 +166,8 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
         http_exchange,
         certificate_chain,
         post_quantum_analysis,
-        extracted_secrets: Some(extracted_secrets),
-        decryption_debug: Some(debug_info),
+        extracted_secrets: None,
+        decryption_debug: None,
     })
 }
 

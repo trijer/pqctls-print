@@ -1,8 +1,5 @@
-use rustls::ConnectionTrafficSecrets;
-
-use crate::error::{Result, TlsError};
+use crate::error::Result;
 use super::types::*;
-use super::utils::bytes_to_hex;
 
 pub fn build_encryption_negotiation(
     cipher_suite: &str,
@@ -285,81 +282,4 @@ fn build_unknown_encryption(
             ],
         },
     }
-}
-
-pub fn build_extracted_secrets_info(secrets: &rustls::ExtractedSecrets) -> Result<ExtractedSecretsInfo> {
-    let (tx_seq, tx_secret) = &secrets.tx;
-    let (rx_seq, rx_secret) = &secrets.rx;
-
-    let (tx_algo, tx_key_hex, tx_iv_hex, tx_key_bits) = match tx_secret {
-        ConnectionTrafficSecrets::Aes256Gcm { key, iv } => {
-            ("AES-256-GCM".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
-        }
-        ConnectionTrafficSecrets::Aes128Gcm { key, iv } => {
-            ("AES-128-GCM".to_string(), format_key_hex(key), format_iv_hex(iv), 128)
-        }
-        ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
-            ("ChaCha20-Poly1305".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
-        }
-        _ => return Err(TlsError::SecretExtraction {
-            reason: "Unknown TX secret variant".to_string(),
-        }),
-    };
-
-    let (rx_algo, rx_key_hex, rx_iv_hex, rx_key_bits) = match rx_secret {
-        ConnectionTrafficSecrets::Aes256Gcm { key, iv } => {
-            ("AES-256-GCM".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
-        }
-        ConnectionTrafficSecrets::Aes128Gcm { key, iv } => {
-            ("AES-128-GCM".to_string(), format_key_hex(key), format_iv_hex(iv), 128)
-        }
-        ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
-            ("ChaCha20-Poly1305".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
-        }
-        _ => return Err(TlsError::SecretExtraction {
-            reason: "Unknown RX secret variant".to_string(),
-        }),
-    };
-
-    Ok(ExtractedSecretsInfo {
-        note: "Successfully extracted session traffic secrets using rustls::dangerous_extract_secrets()".to_string(),
-        tx_secrets: TrafficSecretsInfo {
-            sequence_number: *tx_seq,
-            algorithm: tx_algo,
-            key_hex: tx_key_hex,
-            iv_hex: tx_iv_hex,
-            key_size_bits: tx_key_bits,
-        },
-        rx_secrets: TrafficSecretsInfo {
-            sequence_number: *rx_seq,
-            algorithm: rx_algo,
-            key_hex: rx_key_hex,
-            iv_hex: rx_iv_hex,
-            key_size_bits: rx_key_bits,
-        },
-        decryption_capabilities: DecryptionCapabilities {
-            can_decrypt: vec![
-                "✅ Application Data (HTTP responses, etc.)".to_string(),
-                "✅ NewSessionTicket messages (post-handshake)".to_string(),
-                "✅ KeyUpdate messages (key rotation)".to_string(),
-            ],
-            cannot_decrypt: vec![
-                "❌ Encrypted Handshake Messages (EncryptedExtensions, Certificate, etc.)".to_string(),
-                "❌ ClientHello/ServerHello (never encrypted)".to_string(),
-            ],
-            explanation: "These are APPLICATION TRAFFIC SECRETS, used only after handshake completes. \
-                Handshake messages use different ephemeral keys (handshake traffic secrets) that rustls does not expose. \
-                To decrypt handshake messages, you'd need handshake traffic secrets which require cryptographic derivation \
-                from the handshake secret (not exposed by rustls). The extracted keys are sufficient for decrypting \
-                post-handshake encrypted records with external tools.".to_string(),
-        },
-    })
-}
-
-fn format_key_hex(key: &rustls::crypto::cipher::AeadKey) -> String {
-    bytes_to_hex(key.as_ref())
-}
-
-fn format_iv_hex(iv: &rustls::crypto::cipher::Iv) -> String {
-    bytes_to_hex(iv.as_ref())
 }

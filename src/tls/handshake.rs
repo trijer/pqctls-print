@@ -238,63 +238,6 @@ pub fn parse_handshake_type(msg_type: u8) -> (String, String) {
     }
 }
 
-pub fn parse_new_session_ticket(data: &[u8]) -> Option<HashMap<String, serde_json::Value>> {
-    let mut fields = HashMap::new();
-
-    if data.len() < 9 {
-        return None;
-    }
-
-    let mut pos = 1;
-
-    if pos + 4 > data.len() {
-        return None;
-    }
-    let lifetime = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-    pos += 4;
-    fields.insert("lifetime_seconds".to_string(), json!(lifetime));
-
-    if pos + 4 > data.len() {
-        return None;
-    }
-    let age_add = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-    pos += 4;
-    fields.insert("age_add".to_string(), json!(age_add));
-
-    if pos + 1 > data.len() {
-        return None;
-    }
-    let nonce_len = data[pos] as usize;
-    pos += 1;
-    if pos + nonce_len > data.len() {
-        return None;
-    }
-    let nonce_hex = bytes_to_hex(&data[pos..pos + nonce_len]);
-    pos += nonce_len;
-    fields.insert("nonce_hex".to_string(), json!(nonce_hex));
-    fields.insert("nonce_length".to_string(), json!(nonce_len));
-
-    if pos + 2 > data.len() {
-        return None;
-    }
-    let ticket_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-    pos += 2;
-    if pos + ticket_len > data.len() {
-        return None;
-    }
-    let ticket_hex = bytes_to_hex(&data[pos..pos + ticket_len]);
-    pos += ticket_len;
-    fields.insert("ticket_hex".to_string(), json!(ticket_hex));
-    fields.insert("ticket_length".to_string(), json!(ticket_len));
-
-    if pos + 2 <= data.len() {
-        let ext_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-        fields.insert("extensions_length".to_string(), json!(ext_len));
-    }
-
-    Some(fields)
-}
-
 pub fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<HashMap<String, serde_json::Value>> {
     let mut fields = HashMap::new();
 

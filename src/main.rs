@@ -168,9 +168,9 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
     println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
 
     // Print header
-    println!("{:<20} {:<15} {:<15} {:<20} {:<25}",
-        "Host", "TLS Version", "Key Bits", "Session Resume", "PQC Ready");
-    println!("{}", "─".repeat(95));
+    println!("{:<20} {:<15} {:<15} {:<25}",
+        "Host", "TLS Version", "Key Bits", "PQC Ready");
+    println!("{}", "─".repeat(75));
 
     // Print each result
     for info in results {
@@ -180,12 +180,6 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
             .as_ref()
             .map(|a| a.key_bits.to_string())
             .unwrap_or_else(|| "N/A".to_string());
-        let resumption = if info.session_ticket.is_session_resumption_supported {
-            let days = info.session_ticket.ticket_lifetime_seconds / 86400;
-            format!("Yes ({} days)", days)
-        } else {
-            "No".to_string()
-        };
         let pqc = &info.post_quantum_analysis;
         let has_x25519_mlkem768 = tls::pqc::check_x25519_mlkem768_negotiated(&info.handshake_messages);
         let pqc_status = if pqc.post_quantum_readiness.quantum_safe {
@@ -200,11 +194,10 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
             "✗ Not Ready".to_string()
         };
 
-        println!("{:<20} {:<15} {:<15} {:<20} {:<25}",
+        println!("{:<20} {:<15} {:<15} {:<25}",
             truncate(host, 19),
             truncate(tls_ver, 14),
             key_bits,
-            resumption,
             pqc_status);
     }
 

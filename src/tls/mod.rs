@@ -3,7 +3,6 @@ pub mod encryption;
 pub mod handshake;
 pub mod http;
 pub mod pqc;
-pub mod session;
 pub mod stream;
 pub mod types;
 pub mod utils;
@@ -20,7 +19,6 @@ use certificates::parse_certificate_chain;
 use encryption::build_encryption_negotiation;
 use http::build_http_exchange;
 use pqc::build_post_quantum_analysis;
-use session::build_session_ticket_info;
 use stream::TrackedStream;
 
 /// Analyze a TLS connection and produce a comprehensive security report.
@@ -147,8 +145,6 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     let encryption_negotiation = build_encryption_negotiation(&cipher_suite, &client_random, &server_random)?;
 
-    let session_ticket = build_session_ticket_info(&tls_version, &recorded_messages, false)?;
-
     let http_exchange = build_http_exchange(&http_request, &http_response)?;
 
     let post_quantum_analysis = build_post_quantum_analysis(&encryption_negotiation, &recorded_messages);
@@ -162,7 +158,6 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
         handshake_details,
         handshake_messages: recorded_messages,
         encryption_negotiation,
-        session_ticket,
         http_exchange,
         certificate_chain,
         post_quantum_analysis,

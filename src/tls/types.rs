@@ -10,7 +10,6 @@ pub struct TLSAnalysisReport {
     pub handshake_details: HandshakeDetails,
     pub handshake_messages: Vec<HandshakeMessage>,
     pub encryption_negotiation: EncryptionNegotiation,
-    pub session_ticket: SessionTicketInfo,
     pub http_exchange: HttpExchange,
     pub certificate_chain: Vec<CertificateInfo>,
     pub post_quantum_analysis: PostQuantumAnalysis,
@@ -71,56 +70,6 @@ pub struct HandshakeDetails {
     pub key_share: String,
     pub signature_algorithms: Vec<String>,
     pub supported_groups: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SessionTicketInfo {
-    pub is_session_resumption_supported: bool,
-    pub new_session_ticket_message: bool,
-    pub ticket_lifetime_seconds: u32,
-    pub ticket_age_add: u32,
-    pub ticket_nonce: String,
-    pub resumption_master_secret: ResumptionSecret,
-    pub pre_shared_key: PreSharedKeyInfo,
-    pub resumption_instructions: ResumptionInstructions,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub decrypted_details: Option<DecryptedNewSessionTicket>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DecryptedNewSessionTicket {
-    pub lifetime_seconds: u32,
-    pub age_add: u32,
-    pub nonce_hex: String,
-    pub ticket_hex: String,
-    pub ticket_size_bytes: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ResumptionSecret {
-    pub secret_type: String,
-    pub derivation: String,
-    pub purpose: String,
-    pub length_bits: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PreSharedKeyInfo {
-    pub mode: String,
-    pub identity_obfuscation: String,
-    pub early_exporter_master_secret: bool,
-    pub max_early_data_size: usize,
-    pub psk_key_exchange_mode: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ResumptionInstructions {
-    pub step_1: String,
-    pub step_2: String,
-    pub step_3: String,
-    pub step_4: String,
-    pub expected_obfuscated_ticket_age: String,
-    pub psk_identity_format: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

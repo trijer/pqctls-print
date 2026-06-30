@@ -20,17 +20,17 @@ async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: {} [--output-dir DIR] <url> [url2] [url3] ...", args[0]);
+        eprintln!("Usage: {} [--output-dir DIR] [--json] <url> [url2] [url3] ...", args[0]);
         eprintln!("Example: {} https://example.com https://google.com", args[0]);
-        eprintln!("Example: {} --output-dir ./results https://example.com", args[0]);
+        eprintln!("Example: {} --json --output-dir ./results https://example.com", args[0]);
         std::process::exit(1);
     }
 
-    let (output_dir, url_strings) = parse_args(&args[1..])?;
+    let (output_dir, url_strings, output_json) = parse_args(&args[1..])?;
 
     if url_strings.is_empty() {
         eprintln!("Error: No URLs provided");
-        eprintln!("Usage: {} [--output-dir DIR] <url> [url2] [url3] ...", args[0]);
+        eprintln!("Usage: {} [--output-dir DIR] [--json] <url> [url2] [url3] ...", args[0]);
         std::process::exit(1);
     }
 
@@ -44,12 +44,14 @@ async fn main() -> Result<()> {
 
         match analyze_url(url_str).await {
             Ok((host, info)) => {
-                let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let filename = format!("tls_{}_{}.json", host, timestamp);
-                let filepath = output_dir.join(&filename);
-                let json = serde_json::to_string_pretty(&info)?;
-                fs::write(&filepath, &json)?;
-                eprintln!("   ✓ Saved: {}", filepath.display());
+                if output_json {
+                    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                    let filename = format!("tls_{}_{}.json", host, timestamp);
+                    let filepath = output_dir.join(&filename);
+                    let json = serde_json::to_string_pretty(&info)?;
+                    fs::write(&filepath, &json)?;
+                    eprintln!("   ✓ Saved: {}", filepath.display());
+                }
 
                 reports.push(info);
             }
@@ -68,19 +70,22 @@ async fn main() -> Result<()> {
     println!("\n");
     print_comparison_table(&reports);
 
-    // Save comparison JSON
-    let comparison_json = serde_json::to_string_pretty(&reports)?;
-    let comparison_file = format!("tls_comparison_{}.json", chrono::Local::now().format("%Y%m%d_%H%M%S"));
-    let comparison_path = output_dir.join(&comparison_file);
-    fs::write(&comparison_path, comparison_json)?;
-    eprintln!("\n✓ Comparison saved to: {}", comparison_path.display());
+    // Save comparison JSON if requested
+    if output_json {
+        let comparison_json = serde_json::to_string_pretty(&reports)?;
+        let comparison_file = format!("tls_comparison_{}.json", chrono::Local::now().format("%Y%m%d_%H%M%S"));
+        let comparison_path = output_dir.join(&comparison_file);
+        fs::write(&comparison_path, comparison_json)?;
+        eprintln!("\n✓ Comparison JSON saved to: {}", comparison_path.display());
+    }
 
     Ok(())
 }
 
-fn parse_args(args: &[String]) -> Result<(PathBuf, Vec<String>)> {
+fn parse_args(args: &[String]) -> Result<(PathBuf, Vec<String>, bool)> {
     let mut output_dir = PathBuf::from(".");
     let mut urls = Vec::new();
+    let mut output_json = false;
     let mut i = 0;
 
     while i < args.len() {
@@ -92,6 +97,9 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, Vec<String>)> {
             }
             output_dir = PathBuf::from(&args[i + 1]);
             i += 2;
+        } else if args[i] == "--json" {
+            output_json = true;
+            i += 1;
         } else if args[i].starts_with("--") {
             return Err(error::TlsError::Other(format!(
                 "Unknown option: {}",
@@ -103,7 +111,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, Vec<String>)> {
         }
     }
 
-    Ok((output_dir, urls))
+    Ok((output_dir, urls, output_json))
 }
 
 async fn analyze_url(url_str: &str) -> Result<(String, tls::TLSAnalysisReport)> {

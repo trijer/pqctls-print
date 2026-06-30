@@ -141,15 +141,15 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
         ],
     };
 
-    let (client_random, server_random) = extract_randoms_from_messages(&recorded_messages);
+    let handshake_flow = build_handshake_flow(&recorded_messages);
+
+    let (client_random, server_random) = extract_randoms_from_flow(&handshake_flow);
 
     let encryption_negotiation = build_encryption_negotiation(&cipher_suite, &client_random, &server_random)?;
 
     let http_exchange = build_http_exchange(&http_request, &http_response)?;
 
     let post_quantum_analysis = build_post_quantum_analysis(&encryption_negotiation, &recorded_messages);
-
-    let handshake_flow = build_handshake_flow(&recorded_messages);
 
     Ok(TLSAnalysisReport {
         host: host_owned,
@@ -239,22 +239,22 @@ fn get_key_share_info(_conn: &ClientConnection) -> String {
     "x25519 (secp256r1, x448)".to_string()
 }
 
-fn extract_randoms_from_messages(messages: &[HandshakeMessage]) -> (String, String) {
+fn extract_randoms_from_flow(flow: &HandshakeFlow) -> (String, String) {
     let mut client_random = String::from("(not captured)");
     let mut server_random = String::from("(not captured)");
 
-    for msg in messages {
-        if msg.message_type == "ClientHello" {
-            if let Some(fields) = &msg.fields {
-                if let Some(serde_json::Value::String(random)) = fields.get("random") {
-                    client_random = random.clone();
-                }
+    if let Some(client_hello) = &flow.client_hello {
+        if let Some(fields) = &client_hello.fields {
+            if let Some(serde_json::Value::String(random)) = fields.get("random") {
+                client_random = random.clone();
             }
-        } else if msg.message_type == "ServerHello" {
-            if let Some(fields) = &msg.fields {
-                if let Some(serde_json::Value::String(random)) = fields.get("random") {
-                    server_random = random.clone();
-                }
+        }
+    }
+
+    if let Some(server_hello) = &flow.server_hello {
+        if let Some(fields) = &server_hello.fields {
+            if let Some(serde_json::Value::String(random)) = fields.get("random") {
+                server_random = random.clone();
             }
         }
     }

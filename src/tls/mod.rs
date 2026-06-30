@@ -128,7 +128,6 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     let handshake_details = HandshakeDetails {
         supported_versions: vec![
-            "TLS 1.2 (0x0303)".to_string(),
             "TLS 1.3 (0x0304)".to_string(),
         ],
         key_share,
@@ -190,7 +189,7 @@ fn create_client_config() -> Result<ClientConfig> {
         })?;
     }
 
-    let mut config = ClientConfig::builder()
+    let mut config = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .with_root_certificates(root_store)
         .with_no_client_auth();
 

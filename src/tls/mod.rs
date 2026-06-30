@@ -77,7 +77,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
     let mut tls_stream = rustls::Stream::new(&mut conn, &mut tracked_stream);
 
     let http_request = format!(
-        "GET / HTTP/1.1\r\nHost: {}\r\nUser-Agent: tls-outputter\r\nConnection: close\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: {}\r\nUser-Agent: pqctls-print\r\nConnection: close\r\n\r\n",
         host_owned
     );
 

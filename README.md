@@ -36,26 +36,26 @@ The tool now analyzes **post-quantum cryptography (PQC) readiness** and displays
 cargo build --release
 ```
 
-Binary will be at: `target/release/tls-outputter`
+Binary will be at: `target/release/pqctls-print`
 
 ## Usage
 
 ### Single URL
 ```bash
-./target/release/tls-outputter https://example.com
+./target/release/pqctls-print https://example.com
 ```
 
 ### Multiple URLs (Comparison Mode)
 ```bash
-./target/release/tls-outputter https://example.com https://google.com https://github.com
+./target/release/pqctls-print https://example.com https://google.com https://github.com
 ```
 
 ### With JSON Output
 ```bash
-./target/release/tls-outputter --json https://example.com
+./target/release/pqctls-print --json https://example.com
 
 # With custom output directory
-./target/release/tls-outputter --json --output-dir ./results https://example.com https://google.com
+./target/release/pqctls-print --json --output-dir ./results https://example.com https://google.com
 ```
 
 ### Command-Line Options
@@ -150,7 +150,7 @@ github.com           TLS 1.3 (0x...  TLS13_AES_128_GCM_SHA256 (0x1301)   128
 ### 1. **Security Audit**
 Compare TLS configurations across your organization's domains:
 ```bash
-./tls-outputter https://api.example.com https://web.example.com https://admin.example.com
+./pqctls-print https://api.example.com https://web.example.com https://admin.example.com
 ```
 Quickly spot:
 - Mismatched cipher suites
@@ -170,7 +170,7 @@ Verify minimum TLS standards:
 ### 3. **Quantum-Safe Migration Planning**
 Assess PQC readiness across infrastructure:
 ```bash
-./tls-outputter https://prod1.example.com https://prod2.example.com https://prod3.example.com
+./pqctls-print https://prod1.example.com https://prod2.example.com https://prod3.example.com
 ```
 Identify:
 - Servers ready for hybrid PQC now (Phase 1)
@@ -199,7 +199,7 @@ Debug TLS issues:
 ### 6. **Reporting**
 Generate compliance reports:
 ```bash
-./tls-outputter --json --output-dir ./audit https://prod1.example.com https://prod2.example.com
+./pqctls-print --json --output-dir ./audit https://prod1.example.com https://prod2.example.com
 ```
 - Use JSON output (with `--json`) for scripts/tools
 - Create comparison tables (always printed)
@@ -358,7 +358,7 @@ This is expected for self-signed certificates or incomplete chains. The tool dis
 ### No JSON file created
 Make sure you're using the `--json` flag:
 ```bash
-./tls-outputter --json https://example.com
+./pqctls-print --json https://example.com
 ```
 Also check write permissions in the output directory (or use `--output-dir` to specify a different location).
 

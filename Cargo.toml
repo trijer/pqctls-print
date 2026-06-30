@@ -1,0 +1,22 @@
+[package]
+name = "pqctls-print"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustls = { version = "0.23", features = ["std", "aws_lc_rs"] }
+aws-lc-rs = { version = "1.17", features = [] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2.5"
+anyhow = "1.0"
+thiserror = "1.0"
+rustls-native-certs = "0.7"
+pem = "3.0"
+x509-parser = "0.16"
+asn1-rs = "0.6"
+ring = "0.17"
+chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = "0.3"

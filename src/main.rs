@@ -154,6 +154,25 @@ fn generate_cert_summary(cert: &tls::CertificateInfo, is_self_signed: bool) -> S
     parts.join(" • ")
 }
 
+fn check_x25519_mlkem768_in_handshake(messages: &[tls::HandshakeMessage]) -> bool {
+    for msg in messages {
+        if msg.message_type == "ServerHello" {
+            if let Some(fields) = &msg.fields {
+                if let Some(share) = fields.get("key_share") {
+                    if let serde_json::Value::Object(share_obj) = share {
+                        if let Some(serde_json::Value::String(group)) = share_obj.get("group") {
+                            if group == "X25519MLKEM768" {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
     println!("╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗");
     println!("║                                                TLS CONFIGURATION COMPARISON                                                                ║");
@@ -180,8 +199,11 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
             "No".to_string()
         };
         let pqc = &info.post_quantum_analysis;
+        let has_x25519_mlkem768 = check_x25519_mlkem768_in_handshake(&info.handshake_messages);
         let pqc_status = if pqc.post_quantum_readiness.quantum_safe {
             "✓ Quantum-Safe".to_string()
+        } else if has_x25519_mlkem768 {
+            "✓ X25519MLKEM768".to_string()
         } else if pqc.hybrid_ready {
             "~ Hybrid (partial)".to_string()
         } else if pqc.hybrid_approach_available {

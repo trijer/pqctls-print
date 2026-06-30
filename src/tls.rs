@@ -24,6 +24,16 @@ pub struct TLSAnalysisReport {
     pub post_quantum_analysis: PostQuantumAnalysis,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extracted_secrets: Option<ExtractedSecretsInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decryption_debug: Option<DecryptionDebugInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DecryptionDebugInfo {
+    pub total_encrypted_records_captured: usize,
+    pub encrypted_from_server: usize,
+    pub encrypted_from_client: usize,
+    pub successfully_decrypted: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -81,6 +91,17 @@ pub struct SessionTicketInfo {
     pub resumption_master_secret: ResumptionSecret,
     pub pre_shared_key: PreSharedKeyInfo,
     pub resumption_instructions: ResumptionInstructions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decrypted_details: Option<DecryptedNewSessionTicket>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DecryptedNewSessionTicket {
+    pub lifetime_seconds: u32,
+    pub age_add: u32,
+    pub nonce_hex: String,
+    pub ticket_hex: String,
+    pub ticket_size_bytes: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -414,7 +435,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     // Extract recorded messages and pass secrets for decryption
     let post_handshake_encrypted_count = tracked_stream.post_handshake_encrypted_records();
-    let recorded_messages = tracked_stream.extract_messages_with_secrets(&secrets)?;
+    let (recorded_messages, debug_info) = tracked_stream.extract_messages_with_secrets(&secrets)?;
 
     let certificate_chain = parse_certificate_chain(&peer_certs)?;
 
@@ -470,6 +491,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
         certificate_chain,
         post_quantum_analysis,
         extracted_secrets: Some(extracted_secrets),
+        decryption_debug: Some(debug_info),
     })
 }
 
@@ -703,6 +725,50 @@ pub struct EncryptedRecord {
     pub sequence_number: u64,
 }
 
+fn decrypt_aead_record(
+    ciphertext: &[u8],
+    key: &rustls::crypto::cipher::AeadKey,
+    iv: &rustls::crypto::cipher::Iv,
+    seq_num: u64,
+    is_aes: bool,
+) -> Result<Vec<u8>> {
+    use ring::aead::{self, UnboundKey};
+
+    if ciphertext.len() < 16 {
+        return Err(anyhow!("Ciphertext too short for AEAD"));
+    }
+
+    // Compute nonce by XORing IV with sequence number
+    let mut nonce_bytes = [0u8; 12];
+    for i in 0..12 {
+        nonce_bytes[i] = iv.as_ref()[i];
+    }
+    let seq_bytes = seq_num.to_be_bytes();
+    for i in 0..8 {
+        nonce_bytes[4 + i] ^= seq_bytes[i];
+    }
+
+    let nonce = aead::Nonce::assume_unique_for_key(nonce_bytes);
+    let mut in_out = ciphertext.to_vec();
+
+    let result = if is_aes {
+        let unbound = UnboundKey::new(&aead::AES_256_GCM, key.as_ref())
+            .map_err(|_| anyhow!("Failed to create AES-256-GCM key"))?;
+        let key = aead::LessSafeKey::new(unbound);
+        key.open_in_place(nonce, aead::Aad::empty(), &mut in_out)
+    } else {
+        let unbound = UnboundKey::new(&aead::CHACHA20_POLY1305, key.as_ref())
+            .map_err(|_| anyhow!("Failed to create ChaCha20-Poly1305 key"))?;
+        let key = aead::LessSafeKey::new(unbound);
+        key.open_in_place(nonce, aead::Aad::empty(), &mut in_out)
+    };
+
+    match result {
+        Ok(plaintext) => Ok(plaintext.to_vec()),
+        Err(_) => Err(anyhow!("AEAD decryption failed")),
+    }
+}
+
 pub struct TrackedStream {
     inner: TcpStream,
     messages: Vec<HandshakeMessage>,
@@ -713,6 +779,7 @@ pub struct TrackedStream {
     encrypted_records: Vec<EncryptedRecord>,
     server_seq: u64,
     client_seq: u64,
+    successfully_decrypted: std::cell::Cell<usize>,
 }
 
 impl TrackedStream {
@@ -727,28 +794,57 @@ impl TrackedStream {
             encrypted_records: Vec::new(),
             server_seq: 0,
             client_seq: 0,
+            successfully_decrypted: std::cell::Cell::new(0),
         }
     }
 
-    pub fn extract_messages_with_secrets(mut self, secrets: &rustls::ExtractedSecrets) -> Result<Vec<HandshakeMessage>> {
+    pub fn get_successfully_decrypted(&self) -> usize {
+        self.successfully_decrypted.get()
+    }
+
+    pub fn extract_messages_with_secrets(mut self, secrets: &rustls::ExtractedSecrets) -> Result<(Vec<HandshakeMessage>, DecryptionDebugInfo)> {
+        // Application traffic secrets start at specific sequence numbers after handshake
+        // Records before that used handshake traffic secrets
+        let (_tx_initial_seq, _tx_secret) = &secrets.tx;
+        let (rx_initial_seq, _rx_secret) = &secrets.rx;
+
         // Decrypt and parse encrypted records using application traffic secrets
         let records = self.encrypted_records.clone();
-        for record in records.iter() {
-            match self.decrypt_record(record, secrets) {
-                Ok(plaintext) => {
-                    if !plaintext.is_empty() {
-                        self.parse_decrypted_record(&plaintext, record.direction_is_write);
+        for (_record_index, record) in records.iter().enumerate() {
+            // Only try to decrypt records that come after the application secrets phase starts
+            let is_applicable = if record.direction_is_write {
+                // For TX (client sends), apply from record 0 onwards (or based on tx_initial_seq)
+                true
+            } else {
+                // For RX (server sends), the first rx_initial_seq records use handshake secrets
+                record.sequence_number >= *rx_initial_seq as u64
+            };
+
+            if is_applicable {
+                match self.decrypt_record(record, secrets) {
+                    Ok(plaintext) => {
+                        if !plaintext.is_empty() {
+                            self.successfully_decrypted.set(self.successfully_decrypted.get() + 1);
+                            self.parse_decrypted_record(&plaintext, record.direction_is_write);
+                        }
                     }
-                }
-                Err(e) => {
-                    // Decryption may fail if record predates application secrets phase
-                    // (e.g., handshake phase uses different keys)
+                    Err(_) => {
+                        // Decryption failed, skip this record
+                    }
                 }
             }
         }
         // Add synthesized encrypted handshake messages based on TLS 1.3 flow
         self.add_encrypted_handshake_messages();
-        Ok(self.messages)
+
+        let debug_info = DecryptionDebugInfo {
+            total_encrypted_records_captured: self.encrypted_records.len(),
+            encrypted_from_server: self.encrypted_records_from_server,
+            encrypted_from_client: self.encrypted_records_from_client,
+            successfully_decrypted: self.successfully_decrypted.get(),
+        };
+
+        Ok((self.messages, debug_info))
     }
 
     fn decrypt_record(&self, record: &EncryptedRecord, secrets: &rustls::ExtractedSecrets) -> Result<Vec<u8>> {
@@ -773,16 +869,12 @@ impl TrackedStream {
         }
     }
 
-    fn decrypt_aes_gcm(&self, _ciphertext: &[u8], _key: &rustls::crypto::cipher::AeadKey, _iv: &rustls::crypto::cipher::Iv, _seq_num: u64) -> Result<Vec<u8>> {
-        // Note: We have the keys but ring's decryption API requires a custom NonceSequence
-        // which is designed for streaming use. For single-message decryption,
-        // we'd need to implement this. For now, we demonstrate key extraction.
-        // The extracted secrets are sufficient to decrypt with external tools (e.g., Wireshark).
-        Ok(Vec::new())
+    fn decrypt_aes_gcm(&self, ciphertext: &[u8], key: &rustls::crypto::cipher::AeadKey, iv: &rustls::crypto::cipher::Iv, seq_num: u64) -> Result<Vec<u8>> {
+        decrypt_aead_record(ciphertext, key, iv, seq_num, true)
     }
 
-    fn decrypt_chacha(&self, _ciphertext: &[u8], _key: &rustls::crypto::cipher::AeadKey, _iv: &rustls::crypto::cipher::Iv, _seq_num: u64) -> Result<Vec<u8>> {
-        Ok(Vec::new())
+    fn decrypt_chacha(&self, ciphertext: &[u8], key: &rustls::crypto::cipher::AeadKey, iv: &rustls::crypto::cipher::Iv, seq_num: u64) -> Result<Vec<u8>> {
+        decrypt_aead_record(ciphertext, key, iv, seq_num, false)
     }
 
     fn parse_decrypted_record(&mut self, plaintext: &[u8], is_write: bool) {
@@ -805,6 +897,35 @@ impl TrackedStream {
         if content_type == 22 {
             // Handshake messages
             self.parse_handshake_from_plaintext(content, is_write);
+        } else if content_type == 23 {
+            // Application Data - could contain post-handshake messages
+            // In TLS 1.3, this can include NewSessionTicket, KeyUpdate, etc.
+            if !is_write {
+                self.parse_post_handshake_from_plaintext(content);
+            }
+        }
+    }
+
+    fn parse_post_handshake_from_plaintext(&mut self, data: &[u8]) {
+        // Post-handshake messages in TLS 1.3 are still handshake messages
+        // but encrypted as application data. Check if it starts with handshake header.
+        if data.len() >= 4 {
+            let msg_type = data[0];
+            let (type_name, description) = parse_handshake_type(msg_type);
+
+            if msg_type == 4 {
+                // NewSessionTicket
+                self.messages.push(HandshakeMessage {
+                    sequence: self.sequence,
+                    direction: "Server → Client".to_string(),
+                    message_type: type_name,
+                    size: data.len(),
+                    description,
+                    fields: parse_new_session_ticket(data),
+                    inferred: false,
+                });
+                self.sequence += 1;
+            }
         }
     }
 
@@ -1186,6 +1307,7 @@ fn build_session_ticket_info(tls_version: &str, messages: &[HandshakeMessage], h
             expected_obfuscated_ticket_age: "Verified by server's ticket validation".to_string(),
             psk_identity_format: "{ identity: opaque<1..2^16-1>, obfuscated_ticket_age: uint32 }".to_string(),
         },
+        decrypted_details: None,
     })
 }
 
@@ -1493,6 +1615,86 @@ fn build_unknown_encryption(
             ],
         },
     }
+}
+
+fn parse_new_session_ticket(data: &[u8]) -> Option<std::collections::HashMap<String, serde_json::Value>> {
+    use std::collections::HashMap;
+    use serde_json::json;
+
+    let mut fields = HashMap::new();
+
+    // NewSessionTicket structure:
+    // uint32 ticket_lifetime;
+    // uint32 ticket_age_add;
+    // opaque ticket_nonce<0..255>;
+    // opaque ticket<1..2^16-1>;
+    // Extension extensions<0..2^16-2>;
+
+    if data.len() < 9 {
+        return None;
+    }
+
+    let mut pos = 1; // Skip handshake message type byte
+
+    // ticket_lifetime (4 bytes)
+    if pos + 4 > data.len() {
+        return None;
+    }
+    let lifetime = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+    pos += 4;
+    fields.insert("lifetime_seconds".to_string(), json!(lifetime));
+
+    // ticket_age_add (4 bytes)
+    if pos + 4 > data.len() {
+        return None;
+    }
+    let age_add = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+    pos += 4;
+    fields.insert("age_add".to_string(), json!(age_add));
+
+    // ticket_nonce (variable, length-prefixed)
+    if pos + 1 > data.len() {
+        return None;
+    }
+    let nonce_len = data[pos] as usize;
+    pos += 1;
+    if pos + nonce_len > data.len() {
+        return None;
+    }
+    let nonce_hex = data[pos..pos + nonce_len]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("");
+    pos += nonce_len;
+    fields.insert("nonce_hex".to_string(), json!(nonce_hex));
+    fields.insert("nonce_length".to_string(), json!(nonce_len));
+
+    // ticket (variable, 2-byte length prefix)
+    if pos + 2 > data.len() {
+        return None;
+    }
+    let ticket_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+    pos += 2;
+    if pos + ticket_len > data.len() {
+        return None;
+    }
+    let ticket_hex = data[pos..pos + ticket_len]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("");
+    pos += ticket_len;
+    fields.insert("ticket_hex".to_string(), json!(ticket_hex));
+    fields.insert("ticket_length".to_string(), json!(ticket_len));
+
+    // Extensions (2-byte length prefix)
+    if pos + 2 <= data.len() {
+        let ext_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        fields.insert("extensions_length".to_string(), json!(ext_len));
+    }
+
+    Some(fields)
 }
 
 fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<std::collections::HashMap<String, serde_json::Value>> {

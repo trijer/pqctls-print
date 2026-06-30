@@ -420,8 +420,14 @@ pub fn decrypt_aead_record(
     let mut in_out = ciphertext.to_vec();
 
     let result = if is_aes {
-        let unbound = UnboundKey::new(&aead::AES_256_GCM, key.as_ref())
-            .map_err(|_| TlsError::Other("Failed to create AES-256-GCM key".to_string()))?;
+        let key_bytes = key.as_ref();
+        let aead_algo = match key_bytes.len() {
+            16 => &aead::AES_128_GCM,
+            32 => &aead::AES_256_GCM,
+            _ => return Err(TlsError::Other(format!("Invalid AES key size: {}", key_bytes.len()))),
+        };
+        let unbound = UnboundKey::new(aead_algo, key_bytes)
+            .map_err(|_| TlsError::Other("Failed to create AES-GCM key".to_string()))?;
         let key = aead::LessSafeKey::new(unbound);
         key.open_in_place(nonce, aead::Aad::empty(), &mut in_out)
     } else {

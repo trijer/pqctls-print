@@ -62,9 +62,13 @@ fn extract_key_info(cert: &X509Certificate) -> Result<(String, Option<usize>)> {
 
     let key_size = match pk_algo.to_string().as_str() {
         "1.2.840.113549.1.1.1" | "rsaEncryption" => {
-            cert.public_key().raw.len().checked_mul(8).map(|bits| {
-                if bits > 256 { bits - 24 } else { bits }
-            })
+            let total_bytes = cert.public_key().raw.len();
+            let der_overhead = 38;
+            if total_bytes > der_overhead {
+                Some((total_bytes - der_overhead) * 8)
+            } else {
+                Some(total_bytes * 8)
+            }
         }
         "1.2.840.10045.2.1" | "id-ecPublicKey" => {
             let bits = cert.public_key().raw.len() * 8;

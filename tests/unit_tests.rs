@@ -326,7 +326,7 @@ mod pqc_analysis {
     #[test]
     fn test_classical_only_negotiation() {
         let enc = create_dummy_encryption_negotiation("TLS_AES_256_GCM_SHA384");
-        let pqc = build_post_quantum_analysis(&enc);
+        let pqc = build_post_quantum_analysis(&enc, &[]);
 
         assert!(!pqc.post_quantum_readiness.quantum_safe, "classical-only should not be quantum-safe");
         assert!(!pqc.hybrid_ready, "classical-only should not be hybrid-ready");
@@ -336,7 +336,7 @@ mod pqc_analysis {
     #[test]
     fn test_hybrid_key_exchange() {
         let enc = create_dummy_encryption_negotiation("TLS_KYBER768_WITH_AES_256_GCM");
-        let pqc = build_post_quantum_analysis(&enc);
+        let pqc = build_post_quantum_analysis(&enc, &[]);
 
         assert!(pqc.post_quantum_readiness.pqc_key_exchange_offered);
         assert!(pqc.hybrid_ready);
@@ -345,7 +345,7 @@ mod pqc_analysis {
     #[test]
     fn test_pqc_algorithms_listed() {
         let enc = create_dummy_encryption_negotiation("TLS_AES_256_GCM_SHA384");
-        let pqc = build_post_quantum_analysis(&enc);
+        let pqc = build_post_quantum_analysis(&enc, &[]);
 
         assert!(!pqc.pqc_algorithms_available.is_empty());
         assert!(pqc.pqc_algorithms_available.iter().any(|a| a.contains("Kyber")));
@@ -355,7 +355,7 @@ mod pqc_analysis {
     #[test]
     fn test_migration_strategy_present() {
         let enc = create_dummy_encryption_negotiation("TLS_AES_256_GCM_SHA384");
-        let pqc = build_post_quantum_analysis(&enc);
+        let pqc = build_post_quantum_analysis(&enc, &[]);
 
         assert!(!pqc.migration_strategy.current_security_level.is_empty());
         assert!(!pqc.migration_strategy.implementation_priority.is_empty());

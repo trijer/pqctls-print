@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Result};
 use rustls::ConnectionTrafficSecrets;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
+use crate::error::{Result, TlsError};
 use super::types::{HandshakeMessage, DecryptionDebugInfo};
 use super::handshake::{parse_handshake_type, parse_handshake_fields, parse_new_session_ticket};
 
@@ -106,7 +106,9 @@ impl TrackedStream {
             ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
                 self.decrypt_chacha(&record.data, key, iv, record.sequence_number)
             }
-            _ => Err(anyhow!("Unknown traffic secret variant")),
+            _ => Err(TlsError::SecretExtraction {
+                reason: "Unknown traffic secret variant".to_string(),
+            }),
         }
     }
 
@@ -402,7 +404,7 @@ pub fn decrypt_aead_record(
     use ring::aead::{self, UnboundKey};
 
     if ciphertext.len() < 16 {
-        return Err(anyhow!("Ciphertext too short for AEAD"));
+        return Err(TlsError::Other("Ciphertext too short for AEAD".to_string()));
     }
 
     let mut nonce_bytes = [0u8; 12];
@@ -419,18 +421,18 @@ pub fn decrypt_aead_record(
 
     let result = if is_aes {
         let unbound = UnboundKey::new(&aead::AES_256_GCM, key.as_ref())
-            .map_err(|_| anyhow!("Failed to create AES-256-GCM key"))?;
+            .map_err(|_| TlsError::Other("Failed to create AES-256-GCM key".to_string()))?;
         let key = aead::LessSafeKey::new(unbound);
         key.open_in_place(nonce, aead::Aad::empty(), &mut in_out)
     } else {
         let unbound = UnboundKey::new(&aead::CHACHA20_POLY1305, key.as_ref())
-            .map_err(|_| anyhow!("Failed to create ChaCha20-Poly1305 key"))?;
+            .map_err(|_| TlsError::Other("Failed to create ChaCha20-Poly1305 key".to_string()))?;
         let key = aead::LessSafeKey::new(unbound);
         key.open_in_place(nonce, aead::Aad::empty(), &mut in_out)
     };
 
     match result {
         Ok(plaintext) => Ok(plaintext.to_vec()),
-        Err(_) => Err(anyhow!("AEAD decryption failed")),
+        Err(_) => Err(TlsError::Other("AEAD decryption failed".to_string())),
     }
 }

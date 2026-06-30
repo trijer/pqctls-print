@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Result};
 use rustls::pki_types::CertificateDer;
 use x509_parser::prelude::*;
 use asn1_rs::Oid;
 
+use crate::error::Result;
 use super::types::{CertificateInfo, ExtensionInfo};
 
 pub fn parse_certificate_chain(certs: &[CertificateDer]) -> Result<Vec<CertificateInfo>> {
@@ -17,8 +17,7 @@ pub fn parse_certificate_chain(certs: &[CertificateDer]) -> Result<Vec<Certifica
 }
 
 fn parse_x509_cert(cert_der: &[u8]) -> Result<CertificateInfo> {
-    let (_, cert) = parse_x509_certificate(cert_der)
-        .map_err(|e| anyhow!("Failed to parse X.509 certificate: {}", e))?;
+    let (_, cert) = parse_x509_certificate(cert_der)?;
 
     let subject = cert.subject().to_string();
     let issuer = cert.issuer().to_string();

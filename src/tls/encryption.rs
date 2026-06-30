@@ -1,6 +1,6 @@
-use anyhow::Result;
 use rustls::ConnectionTrafficSecrets;
 
+use crate::error::{Result, TlsError};
 use super::types::*;
 
 pub fn build_encryption_negotiation(
@@ -300,7 +300,9 @@ pub fn build_extracted_secrets_info(secrets: &rustls::ExtractedSecrets) -> Resul
         ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
             ("ChaCha20-Poly1305".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
         }
-        _ => return Err(anyhow::anyhow!("Unknown tx secret variant")),
+        _ => return Err(TlsError::SecretExtraction {
+            reason: "Unknown TX secret variant".to_string(),
+        }),
     };
 
     let (rx_algo, rx_key_hex, rx_iv_hex, rx_key_bits) = match rx_secret {
@@ -313,7 +315,9 @@ pub fn build_extracted_secrets_info(secrets: &rustls::ExtractedSecrets) -> Resul
         ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
             ("ChaCha20-Poly1305".to_string(), format_key_hex(key), format_iv_hex(iv), 256)
         }
-        _ => return Err(anyhow::anyhow!("Unknown rx secret variant")),
+        _ => return Err(TlsError::SecretExtraction {
+            reason: "Unknown RX secret variant".to_string(),
+        }),
     };
 
     Ok(ExtractedSecretsInfo {

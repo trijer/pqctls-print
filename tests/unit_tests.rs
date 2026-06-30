@@ -2,6 +2,92 @@
 /// These tests verify parsing and data structure construction without network access
 
 #[cfg(test)]
+mod error_handling {
+    use tls_outputter::TlsError;
+    use std::io;
+
+    #[test]
+    fn test_connection_failed_error_display() {
+        let err = TlsError::ConnectionFailed {
+            host: "example.com".to_string(),
+            port: 443,
+            source: io::Error::new(io::ErrorKind::ConnectionRefused, "refused"),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("example.com"));
+        assert!(msg.contains("443"));
+    }
+
+    #[test]
+    fn test_connection_timeout_error() {
+        let err = TlsError::ConnectionTimeout {
+            host: "slow.example.com".to_string(),
+            port: 443,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("timed out"));
+    }
+
+    #[test]
+    fn test_no_certificate_error() {
+        let err = TlsError::NoCertificateReceived {
+            host: "example.com".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("No server certificate"));
+    }
+
+    #[test]
+    fn test_empty_certificate_chain_error() {
+        let err = TlsError::EmptyCertificateChain;
+        let msg = err.to_string();
+        assert!(msg.contains("empty certificate chain"));
+    }
+
+    #[test]
+    fn test_invalid_server_name_error() {
+        let err = TlsError::InvalidServerName {
+            name: "invalid..host".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid server name"));
+    }
+
+    #[test]
+    fn test_secret_extraction_error() {
+        let err = TlsError::SecretExtraction {
+            reason: "Unknown secret variant".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to extract traffic secrets"));
+    }
+
+    #[test]
+    fn test_io_error_from_conversion() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
+        let tls_err: TlsError = io_err.into();
+        let msg = tls_err.to_string();
+        assert!(msg.contains("IO error"));
+    }
+
+    #[test]
+    fn test_json_error_conversion() {
+        let json_str = r#"{"invalid": json"#;
+        let json_err = serde_json::from_str::<serde_json::Value>(json_str).unwrap_err();
+        let tls_err: TlsError = json_err.into();
+        let msg = tls_err.to_string();
+        assert!(msg.contains("Failed to serialize to JSON"));
+    }
+
+    #[test]
+    fn test_error_as_debug() {
+        let err = TlsError::EmptyCertificateChain;
+        let debug_msg = format!("{:?}", err);
+        assert!(debug_msg.contains("EmptyCertificateChain"));
+    }
+}
+
+#[cfg(test)]
 mod handshake_parsing {
     use tls_outputter::tls::handshake::{parse_handshake_type, parse_handshake_fields};
 

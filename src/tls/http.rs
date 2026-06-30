@@ -1,5 +1,4 @@
-use anyhow::Result;
-
+use crate::error::Result;
 use super::types::*;
 
 pub fn build_http_exchange(request: &str, response: &str) -> Result<HttpExchange> {

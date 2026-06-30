@@ -7,13 +7,13 @@ pub mod session;
 pub mod stream;
 pub mod types;
 
-use anyhow::{anyhow, Result};
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::error::{Result, TlsError};
 pub use types::*;
 use certificates::parse_certificate_chain;
 use encryption::{build_encryption_negotiation, build_extracted_secrets_info};
@@ -50,7 +50,7 @@ pub async fn analyze_handshake(host: &str, port: u16) -> Result<TLSAnalysisRepor
 
     tokio::task::spawn_blocking(move || perform_tls_handshake(&host_owned, port))
         .await
-        .map_err(|e| anyhow!("Blocking task error: {}", e))?
+        .map_err(|_| TlsError::Other("Blocking task failed".to_string()))?
 }
 
 fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
@@ -62,7 +62,9 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
     let tls_config = create_client_config()?;
     let server_name: rustls::pki_types::ServerName =
         rustls::pki_types::ServerName::try_from(host_owned.as_str())
-            .map_err(|_| anyhow!("Invalid server name: {}", host_owned))?
+            .map_err(|_| TlsError::InvalidServerName {
+                name: host_owned.clone(),
+            })?
             .to_owned();
 
     let mut conn = ClientConnection::new(Arc::new(tls_config), server_name)?;
@@ -104,16 +106,20 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     let peer_certs = conn
         .peer_certificates()
-        .ok_or_else(|| anyhow!("No server certificate received"))?
+        .ok_or_else(|| TlsError::NoCertificateReceived {
+            host: host_owned.clone(),
+        })?
         .to_vec();
 
     if peer_certs.is_empty() {
-        return Err(anyhow!("Empty certificate chain"));
+        return Err(TlsError::EmptyCertificateChain);
     }
 
-    let secrets = conn
-        .dangerous_extract_secrets()
-        .map_err(|e| anyhow!("Failed to extract secrets: {}", e))?;
+    let secrets = conn.dangerous_extract_secrets().map_err(|e| {
+        TlsError::SecretExtraction {
+            reason: e.to_string(),
+        }
+    })?;
 
     let post_handshake_encrypted_count = tracked_stream.post_handshake_encrypted_records();
     let (recorded_messages, debug_info) = tracked_stream.extract_messages_with_secrets(&secrets)?;
@@ -179,9 +185,9 @@ fn create_client_config() -> Result<ClientConfig> {
 
     let native_certs = rustls_native_certs::load_native_certs()?;
     for cert in native_certs {
-        root_store
-            .add(cert)
-            .map_err(|e| anyhow!("Failed to add certificate: {}", e))?;
+        root_store.add(cert).map_err(|_| TlsError::CertificateStoreError {
+            reason: "Failed to add native certificate".to_string(),
+        })?;
     }
 
     let mut config = ClientConfig::builder()

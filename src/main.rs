@@ -1,6 +1,7 @@
+mod error;
 mod tls;
 
-use anyhow::Result;
+use error::Result;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -81,12 +82,17 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, Vec<String>)> {
     while i < args.len() {
         if args[i] == "--output-dir" {
             if i + 1 >= args.len() {
-                return Err(anyhow::anyhow!("--output-dir requires a directory path"));
+                return Err(error::TlsError::Other(
+                    "--output-dir requires a directory path".to_string(),
+                ));
             }
             output_dir = PathBuf::from(&args[i + 1]);
             i += 2;
         } else if args[i].starts_with("--") {
-            return Err(anyhow::anyhow!("Unknown option: {}", args[i]));
+            return Err(error::TlsError::Other(format!(
+                "Unknown option: {}",
+                args[i]
+            )));
         } else {
             urls.push(args[i].clone());
             i += 1;

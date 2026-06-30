@@ -41,6 +41,74 @@ fn get_named_group_name(code: u16) -> String {
     }
 }
 
+fn extract_server_key_share(data: &[u8]) -> Option<serde_json::Value> {
+    if data.len() < 35 {
+        return None;
+    }
+
+    let session_id_len = data[34] as usize;
+    let cs_pos = 35 + session_id_len;
+
+    if cs_pos + 3 > data.len() {
+        return None;
+    }
+
+    let comp_pos = cs_pos + 2;
+    if comp_pos >= data.len() {
+        return None;
+    }
+
+    let comp_len = data[comp_pos] as usize;
+    let ext_start = comp_pos + 1 + comp_len;
+
+    if ext_start + 2 > data.len() {
+        return None;
+    }
+
+    let ext_total_len = u16::from_be_bytes([data[ext_start], data[ext_start + 1]]) as usize;
+    let mut ext_pos = ext_start + 2;
+    let ext_end = ext_pos + ext_total_len;
+
+    while ext_pos + 4 <= ext_end && ext_pos < data.len() {
+        let ext_type = u16::from_be_bytes([data[ext_pos], data[ext_pos + 1]]);
+        let ext_len = u16::from_be_bytes([data[ext_pos + 2], data[ext_pos + 3]]) as usize;
+
+        if ext_type == 0x0033 {
+            return parse_server_key_share_extension(&data[ext_pos + 4..ext_pos + 4 + ext_len]);
+        }
+
+        ext_pos += 4 + ext_len;
+    }
+
+    None
+}
+
+fn parse_server_key_share_extension(data: &[u8]) -> Option<serde_json::Value> {
+    if data.len() < 4 {
+        return None;
+    }
+
+    let group = u16::from_be_bytes([data[0], data[1]]);
+    let key_len = u16::from_be_bytes([data[2], data[3]]) as usize;
+
+    if 4 + key_len > data.len() {
+        return None;
+    }
+
+    let key_hex = data[4..4 + key_len]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("");
+
+    Some(json!({
+        "group": get_named_group_name(group),
+        "group_code": format!("0x{:04x}", group),
+        "key_exchange_length": key_len,
+        "key_exchange": key_hex
+    }))
+}
+
 fn extract_key_shares(data: &[u8]) -> Option<Vec<serde_json::Value>> {
     if data.len() < 35 {
         return None;
@@ -305,6 +373,10 @@ pub fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<HashMap<Strin
 
                 if data.len() > cs_pos + 2 {
                     fields.insert("compression_method".to_string(), json!(data[cs_pos + 2]));
+                }
+
+                if let Some(share) = extract_server_key_share(data) {
+                    fields.insert("key_share".to_string(), share);
                 }
             }
             Some(fields)

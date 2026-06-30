@@ -1,6 +1,54 @@
 use serde_json::json;
 use std::collections::HashMap;
 
+fn get_cipher_suite_name(code: u16) -> String {
+    match code {
+        0x1301 => "TLS_AES_128_GCM_SHA256".to_string(),
+        0x1302 => "TLS_AES_256_GCM_SHA384".to_string(),
+        0x1303 => "TLS_CHACHA20_POLY1305_SHA256".to_string(),
+        0x1304 => "TLS_AES_128_CCM_SHA256".to_string(),
+        0x1305 => "TLS_AES_128_CCM_8_SHA256".to_string(),
+        0xffc2 => "TLS_ECDHE_MLKEM768_AES_256_GCM_SHA384".to_string(),
+        0xffc3 => "TLS_ECDHE_MLKEM512_AES_256_GCM_SHA384".to_string(),
+        0xcca9 => "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256".to_string(),
+        0xcca8 => "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384".to_string(),
+        0xc02b => "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256".to_string(),
+        0xc02c => "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384".to_string(),
+        0xc02f => "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256".to_string(),
+        0xc030 => "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384".to_string(),
+        _ => format!("CIPHER_0x{:04x}", code),
+    }
+}
+
+pub fn extract_cipher_suites(data: &[u8]) -> Option<Vec<String>> {
+    if data.len() < 35 {
+        return None;
+    }
+
+    let mut ciphers = Vec::new();
+    let session_id_len = data[34] as usize;
+    let cs_start = 35 + session_id_len;
+
+    if cs_start + 2 > data.len() {
+        return None;
+    }
+
+    let cs_len = u16::from_be_bytes([data[cs_start], data[cs_start + 1]]) as usize;
+    let mut pos = cs_start + 2;
+
+    while pos + 1 < data.len() && ciphers.len() * 2 < cs_len {
+        if pos + 2 <= data.len() {
+            let cipher_code = u16::from_be_bytes([data[pos], data[pos + 1]]);
+            ciphers.push(get_cipher_suite_name(cipher_code));
+            pos += 2;
+        } else {
+            break;
+        }
+    }
+
+    Some(ciphers)
+}
+
 pub fn parse_handshake_type(msg_type: u8) -> (String, String) {
     match msg_type {
         0 => ("HelloRequest".to_string(), "Server requests renegotiation (TLS 1.2)".to_string()),
@@ -114,6 +162,10 @@ pub fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<HashMap<Strin
                     let cs_len = u16::from_be_bytes([data[cs_start], data[cs_start + 1]]) as usize;
                     let cipher_count = cs_len / 2;
                     fields.insert("cipher_suites_count".to_string(), json!(cipher_count));
+
+                    if let Some(ciphers) = extract_cipher_suites(data) {
+                        fields.insert("cipher_suites".to_string(), json!(ciphers));
+                    }
                 }
             }
             Some(fields)

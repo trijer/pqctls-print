@@ -50,9 +50,21 @@ Binary will be at: `target/release/tls-outputter`
 ./target/release/tls-outputter https://example.com https://google.com https://github.com
 ```
 
+### With JSON Output
+```bash
+./target/release/tls-outputter --json https://example.com
+
+# With custom output directory
+./target/release/tls-outputter --json --output-dir ./results https://example.com https://google.com
+```
+
+### Command-Line Options
+- `--json` - Enable JSON output files (individual and comparison summary)
+- `--output-dir DIR` - Specify output directory for JSON files (default: current directory)
+
 ## Output
 
-### 1. Console Summary
+### 1. Console Summary (Always Displayed)
 Displays formatted human-readable output with:
 - **📡 Connection Info** - Host, port, TLS version, cipher suite
 - **🤝 Handshake Details** - Supported versions, key share, groups, algorithms
@@ -61,9 +73,10 @@ Displays formatted human-readable output with:
 - **🎫 Session Resumption** - Ticket support and lifetime
 - **📜 Certificate Chain** - Complete chain with subject, issuer, SANs
 - **💬 HTTP Exchange** - Request/response sizes and encryption overhead
+- **Comparison Table** - Side-by-side configuration comparison (multiple URLs only)
 
-### 2. JSON Files
-Two types of JSON output are automatically generated:
+### 2. JSON Files (--json flag required)
+When `--json` flag is provided, two types of JSON output are generated:
 
 #### Individual Analysis
 - **Filename**: `tls_<hostname>_<YYYYMMDD_HHMMSS>.json`
@@ -185,8 +198,11 @@ Debug TLS issues:
 
 ### 6. **Reporting**
 Generate compliance reports:
-- Use JSON output for scripts/tools
-- Create comparison tables
+```bash
+./tls-outputter --json --output-dir ./audit https://prod1.example.com https://prod2.example.com
+```
+- Use JSON output (with `--json`) for scripts/tools
+- Create comparison tables (always printed)
 - Track configuration over time
 - Generate audit logs
 - **Monitor quantum-safety progress**
@@ -289,14 +305,31 @@ Shows all 8 secrets derived during handshake:
 7. Master Secret
 8. Exporter Master Secret
 
+## Recent Improvements
+
+### Reliability Fixes
+- **AES-128 Support** - Fixed decryption to properly handle both AES-128-GCM and AES-256-GCM key sizes
+- **RSA Key Size Calculation** - Improved accuracy of RSA certificate key size determination
+- **Test Suite** - Fixed all unit tests for PQC analysis functions
+
+### Code Quality
+- **Reduced Duplication** - Extracted hex formatting utility used across 10+ locations
+- **Eliminated Redundancy** - Removed duplicate PQC readiness check function
+- **Better Maintainability** - Centralized cipher suite and group name lookups
+
+### Output Control
+- **Optional JSON Output** - Use `--json` flag to enable JSON file generation (off by default)
+- **Cleaner Output** - Console comparison table always displayed; JSON files only when requested
+
 ## Dependencies
 
-- **rustls** (0.23) - TLS protocol implementation
+- **rustls** (0.23) - TLS protocol implementation with aws-lc-rs crypto provider
 - **tokio** (1.x) - Async runtime
 - **x509-parser** (0.16) - X.509 certificate parsing
 - **serde/serde_json** - JSON serialization
-- **ring** (0.17) - Cryptographic operations
+- **aws-lc-rs** (1.17) - AWS cryptographic library
 - **chrono** (0.4) - Timestamp generation
+- **thiserror** - Error handling
 
 ## Performance
 
@@ -323,7 +356,11 @@ Check that the host is reachable and accepts HTTPS connections
 This is expected for self-signed certificates or incomplete chains. The tool displays the chain anyway.
 
 ### No JSON file created
-Check write permissions in current working directory
+Make sure you're using the `--json` flag:
+```bash
+./tls-outputter --json https://example.com
+```
+Also check write permissions in the output directory (or use `--output-dir` to specify a different location).
 
 ## Documentation
 

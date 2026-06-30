@@ -168,15 +168,14 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
     println!("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
 
     // Print header
-    println!("{:<20} {:<15} {:<35} {:<15} {:<20} {:<25}",
-        "Host", "TLS Version", "Cipher Suite", "Key Bits", "Session Resume", "PQC Ready");
-    println!("{}", "─".repeat(130));
+    println!("{:<20} {:<15} {:<15} {:<20} {:<25}",
+        "Host", "TLS Version", "Key Bits", "Session Resume", "PQC Ready");
+    println!("{}", "─".repeat(95));
 
     // Print each result
     for info in results {
         let host = &info.host;
         let tls_ver = &info.tls_version;
-        let cipher = &info.cipher_suite;
         let key_bits = info.encryption_negotiation.aead_details
             .as_ref()
             .map(|a| a.key_bits.to_string())
@@ -201,10 +200,9 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
             "✗ Not Ready".to_string()
         };
 
-        println!("{:<20} {:<15} {:<35} {:<15} {:<20} {:<25}",
+        println!("{:<20} {:<15} {:<15} {:<20} {:<25}",
             truncate(host, 19),
             truncate(tls_ver, 14),
-            truncate(cipher, 34),
             key_bits,
             resumption,
             pqc_status);
@@ -212,72 +210,6 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
 
     println!("\n{}", "─".repeat(130));
 
-    println!("\n🔐 Hybrid PQC Support & Cipher Suites\n");
-    println!("AWS-LC Crypto Provider enabled: Supports modern post-quantum cipher suites\n");
-
-    for (idx, info) in results.iter().enumerate() {
-        println!("{}. {} - Cipher Suites Offered in ClientHello", idx + 1, info.host);
-
-        let mut has_pqc = false;
-        let mut pqc_suites = Vec::new();
-        let mut classical_suites = Vec::new();
-
-        for msg in &info.handshake_messages {
-            if msg.message_type == "ClientHello" {
-                if let Some(fields) = &msg.fields {
-                    if let Some(serde_json::Value::Array(ciphers)) = fields.get("cipher_suites") {
-                        for cipher in ciphers {
-                            if let serde_json::Value::String(name) = cipher {
-                                if name.contains("MLKEM") {
-                                    has_pqc = true;
-                                    pqc_suites.push(name.clone());
-                                } else {
-                                    classical_suites.push(name.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if has_pqc {
-            println!("   ✓ Hybrid PQC Suites Available:");
-            for suite in pqc_suites.iter() {
-                let details = match suite.as_str() {
-                    "TLS_ECDHE_MLKEM768_AES_256_GCM_SHA384" => {
-                        " | 192-bit quantum + 128-bit classical | Recommended"
-                    }
-                    "TLS_ECDHE_MLKEM512_AES_256_GCM_SHA384" => {
-                        " | 128-bit quantum + 128-bit classical | Lower overhead"
-                    }
-                    _ => "",
-                };
-                println!("   ├─ {}{}", suite, details);
-            }
-            println!("   │");
-        }
-
-        if !classical_suites.is_empty() {
-            println!("   Classical TLS Suites ({}):", classical_suites.len());
-            for (i, suite) in classical_suites.iter().take(3).enumerate() {
-                let connector = if i == classical_suites.len().saturating_sub(1) {
-                    "└─"
-                } else {
-                    "├─"
-                };
-                println!("   {} {}", connector, suite);
-            }
-            if classical_suites.len() > 3 {
-                println!("   └─ ... and {} more", classical_suites.len() - 3);
-            }
-        }
-
-        println!("   Negotiated: {}", info.cipher_suite);
-        println!();
-    }
-
-    println!("{}", "─".repeat(130));
     println!("\n📄 Certificate Chain Summary\n");
 
     // Print certificate details for entire chain

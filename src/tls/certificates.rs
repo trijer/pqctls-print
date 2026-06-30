@@ -4,6 +4,7 @@ use asn1_rs::Oid;
 
 use crate::error::Result;
 use super::types::{CertificateInfo, ExtensionInfo};
+use super::utils::bytes_to_hex_with_separator;
 
 pub fn parse_certificate_chain(certs: &[CertificateDer]) -> Result<Vec<CertificateInfo>> {
     let mut chain = Vec::new();
@@ -87,12 +88,7 @@ fn extract_key_info(cert: &X509Certificate) -> Result<(String, Option<usize>)> {
 
 fn compute_sha256_fingerprint(cert_der: &[u8]) -> String {
     let digest = ring::digest::digest(&ring::digest::SHA256, cert_der);
-    digest
-        .as_ref()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join(":")
+    bytes_to_hex_with_separator(digest.as_ref(), ":")
 }
 
 fn extract_san(cert: &X509Certificate) -> Result<Vec<String>> {

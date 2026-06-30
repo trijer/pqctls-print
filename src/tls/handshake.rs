@@ -1,5 +1,6 @@
 use serde_json::json;
 use std::collections::HashMap;
+use super::utils::bytes_to_hex;
 
 fn get_cipher_suite_name(code: u16) -> String {
     match code {
@@ -97,11 +98,7 @@ fn parse_server_key_share_extension(data: &[u8]) -> Option<serde_json::Value> {
         return None;
     }
 
-    let key_hex = data[4..4 + key_len]
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join("");
+    let key_hex = bytes_to_hex(&data[4..4 + key_len]);
 
     Some(json!({
         "group": get_named_group_name(group),
@@ -172,11 +169,7 @@ fn parse_key_share_extension(data: &[u8]) -> Option<Vec<serde_json::Value>> {
             break;
         }
 
-        let key_hex = data[pos + 4..pos + 4 + key_len]
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .join("");
+        let key_hex = bytes_to_hex(&data[pos + 4..pos + 4 + key_len]);
 
         shares.push(json!({
             "group": get_named_group_name(group),
@@ -276,11 +269,7 @@ pub fn parse_new_session_ticket(data: &[u8]) -> Option<HashMap<String, serde_jso
     if pos + nonce_len > data.len() {
         return None;
     }
-    let nonce_hex = data[pos..pos + nonce_len]
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join("");
+    let nonce_hex = bytes_to_hex(&data[pos..pos + nonce_len]);
     pos += nonce_len;
     fields.insert("nonce_hex".to_string(), json!(nonce_hex));
     fields.insert("nonce_length".to_string(), json!(nonce_len));
@@ -293,11 +282,7 @@ pub fn parse_new_session_ticket(data: &[u8]) -> Option<HashMap<String, serde_jso
     if pos + ticket_len > data.len() {
         return None;
     }
-    let ticket_hex = data[pos..pos + ticket_len]
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join("");
+    let ticket_hex = bytes_to_hex(&data[pos..pos + ticket_len]);
     pos += ticket_len;
     fields.insert("ticket_hex".to_string(), json!(ticket_hex));
     fields.insert("ticket_length".to_string(), json!(ticket_len));
@@ -321,11 +306,7 @@ pub fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<HashMap<Strin
             let version = u16::from_be_bytes([data[0], data[1]]);
             fields.insert("client_version".to_string(), json!(format!("0x{:04x}", version)));
 
-            let random = data[2..34]
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join("");
+            let random = bytes_to_hex(&data[2..34]);
             fields.insert("random".to_string(), json!(random));
 
             if data.len() > 34 {
@@ -356,11 +337,7 @@ pub fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<HashMap<Strin
             let version = u16::from_be_bytes([data[0], data[1]]);
             fields.insert("server_version".to_string(), json!(format!("0x{:04x}", version)));
 
-            let random = data[2..34]
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join("");
+            let random = bytes_to_hex(&data[2..34]);
             fields.insert("random".to_string(), json!(random));
 
             if data.len() > 34 {
@@ -407,11 +384,7 @@ pub fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<HashMap<Strin
         12 => {
             fields.insert("verification_data_length".to_string(), json!(data.len()));
             if data.len() > 0 {
-                let data_hex = data[..std::cmp::min(16, data.len())]
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<Vec<_>>()
-                    .join("");
+                let data_hex = bytes_to_hex(&data[..std::cmp::min(16, data.len())]);
                 fields.insert(
                     "verification_data_preview".to_string(),
                     json!(data_hex + if data.len() > 16 { "..." } else { "" }),

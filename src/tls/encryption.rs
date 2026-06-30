@@ -2,6 +2,7 @@ use rustls::ConnectionTrafficSecrets;
 
 use crate::error::{Result, TlsError};
 use super::types::*;
+use super::utils::bytes_to_hex;
 
 pub fn build_encryption_negotiation(
     cipher_suite: &str,
@@ -356,17 +357,9 @@ pub fn build_extracted_secrets_info(secrets: &rustls::ExtractedSecrets) -> Resul
 }
 
 fn format_key_hex(key: &rustls::crypto::cipher::AeadKey) -> String {
-    key.as_ref()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join("")
+    bytes_to_hex(key.as_ref())
 }
 
 fn format_iv_hex(iv: &rustls::crypto::cipher::Iv) -> String {
-    iv.as_ref()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join("")
+    bytes_to_hex(iv.as_ref())
 }

@@ -6,6 +6,7 @@ pub mod pqc;
 pub mod session;
 pub mod stream;
 pub mod types;
+pub mod utils;
 
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
 use std::io::{Read, Write};

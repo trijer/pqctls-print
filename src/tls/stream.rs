@@ -42,10 +42,6 @@ impl TrackedStream {
         }
     }
 
-    pub fn get_successfully_decrypted(&self) -> usize {
-        self.successfully_decrypted.get()
-    }
-
     pub fn extract_messages_with_secrets(
         mut self,
         secrets: &rustls::ExtractedSecrets,

@@ -8,7 +8,7 @@ pub struct TLSAnalysisReport {
     pub tls_version: String,
     pub cipher_suite: String,
     pub handshake_details: HandshakeDetails,
-    pub handshake_messages: Vec<HandshakeMessage>,
+    pub handshake_messages: HandshakeFlow,
     pub encryption_negotiation: EncryptionNegotiation,
     pub http_exchange: HttpExchange,
     pub certificate_chain: Vec<CertificateInfo>,
@@ -17,6 +17,29 @@ pub struct TLSAnalysisReport {
     pub extracted_secrets: Option<ExtractedSecretsInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decryption_debug: Option<DecryptionDebugInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HandshakeFlow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_hello: Option<HandshakeMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_hello: Option<HandshakeMessage>,
+    pub subsequent_messages: Vec<HandshakeMessage>,
+}
+
+impl HandshakeFlow {
+    pub fn all_messages(&self) -> Vec<HandshakeMessage> {
+        let mut messages = Vec::new();
+        if let Some(ch) = &self.client_hello {
+            messages.push(ch.clone());
+        }
+        if let Some(sh) = &self.server_hello {
+            messages.push(sh.clone());
+        }
+        messages.extend(self.subsequent_messages.clone());
+        messages
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,7 +74,7 @@ pub struct TrafficSecretsInfo {
     pub key_size_bits: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HandshakeMessage {
     pub sequence: usize,
     pub direction: String,

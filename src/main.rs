@@ -181,7 +181,7 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
             .map(|a| a.key_bits.to_string())
             .unwrap_or_else(|| "N/A".to_string());
         let pqc = &info.post_quantum_analysis;
-        let has_x25519_mlkem768 = tls::pqc::check_x25519_mlkem768_negotiated(&info.handshake_messages);
+        let has_x25519_mlkem768 = tls::pqc::check_x25519_mlkem768_negotiated(&info.handshake_messages.all_messages());
         let pqc_status = if pqc.post_quantum_readiness.quantum_safe {
             "✓ Quantum-Safe".to_string()
         } else if has_x25519_mlkem768 {

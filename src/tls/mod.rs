@@ -149,6 +149,8 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     let post_quantum_analysis = build_post_quantum_analysis(&encryption_negotiation, &recorded_messages);
 
+    let handshake_flow = build_handshake_flow(&recorded_messages);
+
     Ok(TLSAnalysisReport {
         host: host_owned,
         port,
@@ -156,7 +158,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
         tls_version,
         cipher_suite,
         handshake_details,
-        handshake_messages: recorded_messages,
+        handshake_messages: handshake_flow,
         encryption_negotiation,
         http_exchange,
         certificate_chain,
@@ -164,6 +166,32 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
         extracted_secrets: None,
         decryption_debug: None,
     })
+}
+
+fn build_handshake_flow(messages: &[HandshakeMessage]) -> HandshakeFlow {
+    let mut client_hello = None;
+    let mut server_hello = None;
+    let mut subsequent_messages = Vec::new();
+
+    for msg in messages {
+        match msg.message_type.as_str() {
+            "ClientHello" => {
+                client_hello = Some(msg.clone());
+            }
+            "ServerHello" => {
+                server_hello = Some(msg.clone());
+            }
+            _ => {
+                subsequent_messages.push(msg.clone());
+            }
+        }
+    }
+
+    HandshakeFlow {
+        client_hello,
+        server_hello,
+        subsequent_messages,
+    }
 }
 
 fn create_client_config() -> Result<ClientConfig> {

@@ -1,6 +1,6 @@
 use super::types::*;
 
-fn check_x25519_mlkem768_negotiated(messages: &[HandshakeMessage]) -> bool {
+pub fn check_x25519_mlkem768_negotiated(messages: &[HandshakeMessage]) -> bool {
     for msg in messages {
         if msg.message_type == "ServerHello" {
             if let Some(fields) = &msg.fields {

@@ -1,10 +1,10 @@
-mod certificates;
-mod encryption;
-mod handshake;
-mod http;
-mod pqc;
-mod session;
-mod stream;
+pub mod certificates;
+pub mod encryption;
+pub mod handshake;
+pub mod http;
+pub mod pqc;
+pub mod session;
+pub mod stream;
 pub mod types;
 
 use anyhow::{anyhow, Result};

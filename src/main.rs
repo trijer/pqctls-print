@@ -259,31 +259,6 @@ fn print_comparison_table(results: &[tls::TLSAnalysisReport]) {
         println!();
     }
 
-    println!("📨 Handshake Message Flow\n");
-
-    // Print handshake stats
-    for (idx, info) in results.iter().enumerate() {
-        println!("{}. {} ({} messages)", idx + 1, info.host, info.handshake_messages.len());
-
-        let mut client_msgs = 0;
-        let mut server_msgs = 0;
-        let mut total_size = 0;
-
-        for msg in &info.handshake_messages {
-            if msg.direction.starts_with("Client") {
-                client_msgs += 1;
-            } else {
-                server_msgs += 1;
-            }
-            total_size += msg.size;
-        }
-
-        println!("   Client → Server: {} messages", client_msgs);
-        println!("   Server → Client: {} messages", server_msgs);
-        println!("   Total Size:      {} bytes", total_size);
-        println!();
-    }
-
     println!("\n🔐 Post-Quantum Cryptography Readiness\n");
 
     // Print PQC analysis

@@ -157,7 +157,7 @@ fn perform_tls_handshake(host: &str, port: u16) -> Result<TLSAnalysisReport> {
 
     let http_exchange = build_http_exchange(&http_request, &http_response)?;
 
-    let post_quantum_analysis = build_post_quantum_analysis(&encryption_negotiation);
+    let post_quantum_analysis = build_post_quantum_analysis(&encryption_negotiation, &recorded_messages);
 
     let extracted_secrets = build_extracted_secrets_info(&secrets)?;
 

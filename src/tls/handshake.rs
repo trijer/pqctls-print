@@ -37,6 +37,8 @@ fn get_named_group_name(code: u16) -> String {
         0x001e => "x448".to_string(),
         0xffc2 => "MLKEM768".to_string(),
         0xffc3 => "MLKEM512".to_string(),
+        0x11ec => "X25519MLKEM768".to_string(),
+        0x11eb => "secp256r1MLKEM768".to_string(),
         _ => format!("GROUP_0x{:04x}", code),
     }
 }

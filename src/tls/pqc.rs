@@ -1,9 +1,29 @@
 use super::types::*;
 
-pub fn build_post_quantum_analysis(encryption_negotiation: &EncryptionNegotiation) -> PostQuantumAnalysis {
+fn check_x25519_mlkem768_negotiated(messages: &[HandshakeMessage]) -> bool {
+    for msg in messages {
+        if msg.message_type == "ServerHello" {
+            if let Some(fields) = &msg.fields {
+                if let Some(share) = fields.get("key_share") {
+                    if let serde_json::Value::Object(share_obj) = share {
+                        if let Some(serde_json::Value::String(group)) = share_obj.get("group") {
+                            if group == "X25519MLKEM768" {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+pub fn build_post_quantum_analysis(encryption_negotiation: &EncryptionNegotiation, messages: &[HandshakeMessage]) -> PostQuantumAnalysis {
     let cipher_name = &encryption_negotiation.cipher_suite_name;
 
-    let pqc_key_exchange_offered = cipher_name.contains("KYBER") || cipher_name.contains("MLKEM");
+    let x25519_mlkem768_negotiated = check_x25519_mlkem768_negotiated(messages);
+    let pqc_key_exchange_offered = x25519_mlkem768_negotiated || cipher_name.contains("KYBER") || cipher_name.contains("MLKEM");
     let pqc_signature_offered =
         cipher_name.contains("DILITHIUM") || cipher_name.contains("MLDSA") || cipher_name.contains("FALCON");
     let quantum_safe = pqc_key_exchange_offered && pqc_signature_offered;

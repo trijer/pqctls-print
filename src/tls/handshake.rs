@@ -20,6 +20,111 @@ fn get_cipher_suite_name(code: u16) -> String {
     }
 }
 
+fn get_named_group_name(code: u16) -> String {
+    match code {
+        0x0001 => "secp160r1".to_string(),
+        0x0002 => "secp192r1".to_string(),
+        0x0003 => "secp224r1".to_string(),
+        0x0004 => "secp256r1 (P-256)".to_string(),
+        0x0005 => "secp384r1 (P-384)".to_string(),
+        0x0006 => "secp521r1 (P-521)".to_string(),
+        0x0010 => "ffdhe2048".to_string(),
+        0x0011 => "ffdhe3072".to_string(),
+        0x0012 => "ffdhe4096".to_string(),
+        0x0013 => "ffdhe6144".to_string(),
+        0x0014 => "ffdhe8192".to_string(),
+        0x001d => "x25519".to_string(),
+        0x001e => "x448".to_string(),
+        0xffc2 => "MLKEM768".to_string(),
+        0xffc3 => "MLKEM512".to_string(),
+        _ => format!("GROUP_0x{:04x}", code),
+    }
+}
+
+fn extract_key_shares(data: &[u8]) -> Option<Vec<serde_json::Value>> {
+    if data.len() < 35 {
+        return None;
+    }
+
+    let session_id_len = data[34] as usize;
+    let cs_start = 35 + session_id_len;
+
+    if cs_start + 2 > data.len() {
+        return None;
+    }
+
+    let cs_len = u16::from_be_bytes([data[cs_start], data[cs_start + 1]]) as usize;
+    let comp_start = cs_start + 2 + cs_len;
+
+    if comp_start >= data.len() {
+        return None;
+    }
+
+    let comp_len = data[comp_start] as usize;
+    let ext_start = comp_start + 1 + comp_len;
+
+    if ext_start + 2 > data.len() {
+        return None;
+    }
+
+    let ext_total_len = u16::from_be_bytes([data[ext_start], data[ext_start + 1]]) as usize;
+    let mut ext_pos = ext_start + 2;
+    let ext_end = ext_pos + ext_total_len;
+
+    while ext_pos + 4 <= ext_end && ext_pos < data.len() {
+        let ext_type = u16::from_be_bytes([data[ext_pos], data[ext_pos + 1]]);
+        let ext_len = u16::from_be_bytes([data[ext_pos + 2], data[ext_pos + 3]]) as usize;
+
+        if ext_type == 0x0033 {
+            return parse_key_share_extension(&data[ext_pos + 4..ext_pos + 4 + ext_len]);
+        }
+
+        ext_pos += 4 + ext_len;
+    }
+
+    None
+}
+
+fn parse_key_share_extension(data: &[u8]) -> Option<Vec<serde_json::Value>> {
+    if data.len() < 2 {
+        return None;
+    }
+
+    let mut shares = Vec::new();
+    let shares_len = u16::from_be_bytes([data[0], data[1]]) as usize;
+    let mut pos = 2;
+
+    while pos + 4 <= data.len() && pos < 2 + shares_len {
+        let group = u16::from_be_bytes([data[pos], data[pos + 1]]);
+        let key_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+
+        if pos + 4 + key_len > data.len() {
+            break;
+        }
+
+        let key_hex = data[pos + 4..pos + 4 + key_len]
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join("");
+
+        shares.push(json!({
+            "group": get_named_group_name(group),
+            "group_code": format!("0x{:04x}", group),
+            "key_exchange_length": key_len,
+            "key_exchange": key_hex
+        }));
+
+        pos += 4 + key_len;
+    }
+
+    if shares.is_empty() {
+        None
+    } else {
+        Some(shares)
+    }
+}
+
 pub fn extract_cipher_suites(data: &[u8]) -> Option<Vec<String>> {
     if data.len() < 35 {
         return None;
@@ -166,6 +271,10 @@ pub fn parse_handshake_fields(msg_type: u8, data: &[u8]) -> Option<HashMap<Strin
                     if let Some(ciphers) = extract_cipher_suites(data) {
                         fields.insert("cipher_suites".to_string(), json!(ciphers));
                     }
+                }
+
+                if let Some(shares) = extract_key_shares(data) {
+                    fields.insert("key_shares".to_string(), json!(shares));
                 }
             }
             Some(fields)

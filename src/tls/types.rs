@@ -29,6 +29,7 @@ pub struct HandshakeFlow {
 }
 
 impl HandshakeFlow {
+    #[allow(dead_code)]
     pub fn all_messages(&self) -> Vec<HandshakeMessage> {
         let mut messages = Vec::new();
         if let Some(ch) = &self.client_hello {

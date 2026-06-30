@@ -1,19 +1,22 @@
 use super::types::*;
 
-pub fn check_x25519_mlkem768_negotiated(messages: &[HandshakeMessage]) -> bool {
-    for msg in messages {
-        if msg.message_type == "ServerHello" {
-            if let Some(fields) = &msg.fields {
-                if let Some(share) = fields.get("key_share") {
-                    if let serde_json::Value::Object(share_obj) = share {
-                        if let Some(serde_json::Value::String(group)) = share_obj.get("group") {
-                            if group == "X25519MLKEM768" {
-                                return true;
-                            }
-                        }
-                    }
+pub fn check_x25519_mlkem768_in_server_hello(server_hello: &HandshakeMessage) -> bool {
+    if let Some(fields) = &server_hello.fields {
+        if let Some(share) = fields.get("key_share") {
+            if let serde_json::Value::Object(share_obj) = share {
+                if let Some(serde_json::Value::String(group)) = share_obj.get("group") {
+                    return group == "X25519MLKEM768";
                 }
             }
+        }
+    }
+    false
+}
+
+pub fn check_x25519_mlkem768_negotiated(messages: &[HandshakeMessage]) -> bool {
+    for msg in messages {
+        if msg.message_type == "ServerHello" && check_x25519_mlkem768_in_server_hello(msg) {
+            return true;
         }
     }
     false
